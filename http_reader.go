@@ -48,7 +48,7 @@ func ReadRequest(conn net.Conn) (HttpRequest, error) {
 		return request, fmt.Errorf("malformed request")
 	}
 	if !slices.Contains(HttpMethods, fmtParts[0]) || !slices.Contains(HttpVersions, fmtParts[2]) {
-		return request, fmt.Errorf("unsupported method or version")
+		return request, fmt.Errorf("%s is not a supported method or version", fmtParts[0]+" "+fmtParts[2])
 	}
 
 	request.Method = fmtParts[0]

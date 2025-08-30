@@ -11,6 +11,7 @@
 - Basic logging (to console and files)
 - Uses raw TCP connections (no HTTP library)
 - Lightweight and fast
+- Has a built-in WAF (Web Application Firewall), configurable to block libraries (such as curl, wget, etc.), crawlers, specific IPs, and more.
 
 ## Installation
 
