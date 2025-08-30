@@ -1,6 +1,7 @@
-*I still didn't find a name for this project*
-
-A simple reverse proxy made in Go.
+<div align="center">
+  <h1>Iridium</h1>
+  <p>A simple reverse proxy made in Go.</p>
+</div>
 
 ## Features
 
@@ -17,4 +18,4 @@ As of now, there are no pre-built binaries available. You need to build it from 
 
 ## Configuration
 
-On first run (without a config file), a default config file will be created in the `~/.reverseproxy` directory (or `%APPDATA%\reverseproxy` on Windows). You can edit this file to customize the behavior of the reverse proxy. The configuration is done in YAML format.
+On first run (without a config file), a default config file will be created in the `~/.iridium` directory (or `%APPDATA%\Iridium` on Windows). You can edit this file to customize the behavior of the reverse proxy. The configuration is done in YAML format.

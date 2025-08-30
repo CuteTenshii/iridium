@@ -10,14 +10,14 @@ func GetDataDirectory() string {
 		// Windows
 		appData := os.Getenv("APPDATA")
 		if appData != "" {
-			return appData + "\\ReverseProxy"
+			return appData + "\\Iridium"
 		}
 		return "."
 	} else {
 		// Linux and macOS
 		home := os.Getenv("HOME")
 		if home != "" {
-			return home + "/.reverseproxy"
+			return home + "/.iridium"
 		}
 		return "."
 	}
