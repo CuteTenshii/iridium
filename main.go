@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
 
 const VERSION = "1.0.0"
@@ -65,6 +67,15 @@ func main() {
 			ServeResponse(conn, ResponseServed{Status: 200, Body: FallbackHtml()})
 			continue
 		}
+		waf := MakeWAFChecks(request)
+		if waf.Blocked {
+			if waf.CloseConnection {
+				conn.Close()
+				continue
+			}
+			ServeError(conn, 403)
+			continue
+		}
 		if matchedHost.Domain == host {
 			for _, location := range matchedHost.Locations {
 				if IsLocationMatching(location.Match, request.Path) {
@@ -115,10 +126,71 @@ func main() {
 						if mimeType == "" {
 							mimeType = "application/octet-stream"
 						}
+						headers := make(map[string]string)
+						if location.Headers != nil {
+							for k, v := range *location.Headers {
+								headers[k] = v
+							}
+						}
+						if strings.HasPrefix(mimeType, "video/") || strings.HasPrefix(mimeType, "audio/") {
+							headers["Accept-Ranges"] = "bytes"
+						}
+						if request.Headers["Range"] != "" {
+							headers["Accept-Ranges"] = "bytes"
+							counts := regexp.MustCompile(`bytes=(\d*)-(\d*)`).FindStringSubmatch(request.Headers["Range"])
+							if len(counts) != 3 {
+								ServeError(conn, 400)
+								break
+							}
+							startStr, endStr := counts[1], counts[2]
+							var start, end int
+							if startStr == "" && endStr == "" {
+								ServeError(conn, 400)
+								break
+							} else if startStr == "" {
+								// suffix byte range: bytes=-N
+								n, err := fmt.Sscanf(endStr, "%d", &end)
+								if n != 1 || err != nil {
+									ServeError(conn, 400)
+									break
+								}
+								if end > len(data) {
+									end = len(data)
+								}
+								start = len(data) - end
+								end = len(data) - 1
+							} else if endStr == "" {
+								// open-ended byte range: bytes=N-
+								n, err := fmt.Sscanf(startStr, "%d", &start)
+								if n != 1 || err != nil || start >= len(data) || start < 0 {
+									ServeError(conn, 400)
+									break
+								}
+								end = len(data) - 1
+							} else {
+								// specific byte range: bytes=N-M
+								n1, err1 := fmt.Sscanf(startStr, "%d", &start)
+								n2, err2 := fmt.Sscanf(endStr, "%d", &end)
+								if n1 != 1 || err1 != nil || n2 != 1 || err2 != nil || start < 0 || end < 0 || start >= len(data) || end >= len(data) || start > end {
+									ServeError(conn, 400)
+									break
+								}
+							}
+							data = data[start : end+1]
+							headers["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", start, end, stat.Size())
+							ServeResponse(conn, ResponseServed{
+								Status:      206,
+								Body:        string(data),
+								ContentType: &mimeType,
+								Headers:     headers,
+							})
+							break
+						}
 						ServeResponse(conn, ResponseServed{
 							Status:      200,
 							Body:        string(data),
 							ContentType: &mimeType,
+							Headers:     headers,
 						})
 						break
 					} else if location.Proxy != nil {
