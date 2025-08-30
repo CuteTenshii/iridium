@@ -3,22 +3,27 @@ package main
 import (
 	"fmt"
 	"net"
+	"strings"
 )
 
-func ServeFallback() string {
-	html := `<html>
-	  <head><title>Welcome to Iridium!</title></head>
-	  <body>
-		<center>
-		  <h1>Welcome to Iridium!</h1>
-		  <p>This is the default page served by Iridium.</p>
-		  <p>Please configure your hosts to point to the appropriate services!</p>
-		  <hr>
-		  <p>Iridium v` + VERSION + `</p>
-		</center>
-	  </body>
-	  </html>`
-	return html
+func FallbackHtml() string {
+	html := `<!DOCTYPE html>
+<html>
+  <head>
+    <title>Welcome to Iridium!</title>
+    <meta charset="utf-8">
+  </head>
+  <body>
+	<center>
+	  <h1>Welcome to Iridium!</h1>
+	  <p>This is the default page served by Iridium.</p>
+	  <p>If you see this page, it means that no host configuration matched your request.</p>
+	  <hr>
+	  <p>Iridium v` + VERSION + `</p>
+	</center>
+  </body>
+</html>`
+	return strings.TrimSpace(html)
 }
 
 type ResponseServed struct {

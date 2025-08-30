@@ -62,10 +62,7 @@ func main() {
 		}
 		matchedHost := FindHost(hosts, host)
 		if matchedHost == nil {
-			ServeResponse(conn, ResponseServed{
-				Status: 503,
-				Body:   "No matching host configuration. In your config, ensure you have a host entry for '" + host + "'.",
-			})
+			ServeResponse(conn, ResponseServed{Status: 200, Body: FallbackHtml()})
 			continue
 		}
 		if matchedHost.Domain == host {

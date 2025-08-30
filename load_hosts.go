@@ -38,20 +38,27 @@ func LoadHosts() ([]Host, error) {
 		}
 
 		// Create a default hosts file
-		defaultContent := "# Default host configuration. This file has been created automatically.\n" +
-			"# You can edit this file to add your own host configurations.\n\n" +
-			"domain: example.com\n" +
-			"locations:\n" +
-			"  - match: /\n" +
-			"    content: |\n" +
-			"	   <!DOCTYPE html>\n" +
-			"      <html>\n" +
-			"      <head><title>Welcome to ReverseProxy</title></head>\n" +
-			"      <body>\n" +
-			"        <h1>It works!</h1>\n" +
-			"        <p>This is the default page served by ReverseProxy.</p>\n" +
-			"      </body>\n" +
-			"      </html>\n"
+		defaultContent := `# Default host configuration. This file has been created automatically.
+# You can edit this file to add your own host configurations.
+
+domain: example.com
+locations:
+  - match: /
+    content: |
+      <!DOCTYPE html>
+      <html>
+        <head><title>Welcome to Iridium!</title></head>
+        <body>
+          <center>
+            <h1>Welcome to Iridium!</h1>
+            <p>This is the default page served by Iridium.</p>
+            <p>If you see this page, it means that no host configuration matched your request.</p>
+            <hr>
+            <p>Iridium v` + VERSION + `</p>
+          </center>
+        </body>
+      </html>
+`
 		if err := os.WriteFile(hostsDir+"/default.yml", []byte(defaultContent), 0644); err != nil {
 			return nil, fmt.Errorf("failed to create default hosts file: %v", err)
 		}
