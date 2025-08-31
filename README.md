@@ -17,6 +17,15 @@
 
 As of now, there are no pre-built binaries available. You need to build it from source.
 
+### Docker
+
+You can build and run Iridium using Docker with the following commands:
+
+```bash
+docker build -t iridium .
+docker run -d -p 8080:8080 --name iridium_container iridium
+```
+
 ## Configuration
 
 On first run (without a config file), a default config file will be created in the `~/.iridium` directory (or `%APPDATA%\Iridium` on Windows). You can edit this file to customize the behavior of the reverse proxy. The configuration is done in YAML format.
