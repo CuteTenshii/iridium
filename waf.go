@@ -59,7 +59,6 @@ func MakeWAFChecks(request HttpRequest) WAFResult {
 		return WAFResult{Blocked: true, Reason: StrPtr("empty User-Agent"), CloseConnection: true}
 	}
 	if blockLibraries && ua != "" {
-		print(CurlUserAgent.MatchString(ua), " ", ua, "\n")
 		if BunUserAgent.MatchString(ua) || InsomniaUserAgent.MatchString(ua) || PostmanUserAgent.MatchString(ua) ||
 			GoHttpClientUserAgent.MatchString(ua) || CurlUserAgent.MatchString(ua) || WgetUserAgent.MatchString(ua) ||
 			AxiosUserAgent.MatchString(ua) || HttpxUserAgent.MatchString(ua) || PythonRequestsUserAgent.MatchString(ua) ||
