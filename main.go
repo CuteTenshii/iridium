@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 const VERSION = "1.0.0"
@@ -79,6 +80,36 @@ func main() {
 		if matchedHost.Domain == host {
 			for _, location := range matchedHost.Locations {
 				if IsLocationMatching(location.Match, request.Path) {
+					if IsEdgeCacheEligible(request.Path, matchedHost.EdgeCache.Extensions) {
+						if data, found := GetFileFromEdgeCache(request.Path); found {
+							mimeType := "application/octet-stream"
+							ext := filepath.Ext(request.Path)
+							if ext != "" {
+								if mt := mime.TypeByExtension(ext); mt != "" {
+									mimeType = mt
+								}
+							}
+							headers := make(map[string]string)
+							if location.Headers != nil {
+								for k, v := range *location.Headers {
+									headers[k] = v
+								}
+							}
+							if strings.HasPrefix(mimeType, "video/") || strings.HasPrefix(mimeType, "audio/") {
+								headers["Accept-Ranges"] = "bytes"
+							}
+							headers["X-Cache"] = "HIT"
+							ServeResponse(conn, ResponseServed{
+								Status:      200,
+								Body:        string(data),
+								ContentType: &mimeType,
+								Headers:     headers,
+							})
+							break
+						}
+					}
+
+					// Handle the request based on the location configuration
 					if location.Content != nil {
 						ServeResponse(conn, ResponseServed{Status: 200, Body: *location.Content})
 						break
@@ -176,8 +207,32 @@ func main() {
 									break
 								}
 							}
+
+							if matchedHost.EdgeCache.Enabled {
+								headers["X-Cache"] = "MISS"
+
+								if IsEdgeCacheEligible(request.Path, matchedHost.EdgeCache.Extensions) {
+									// Add to edge cache
+									cacheDuration := matchedHost.EdgeCache.Duration
+									if cacheDuration <= 0 {
+										cacheDuration = 3600 // Default to 1 hour
+									}
+									err = AddFileToEdgeCache(edgeCacheFile{
+										Data:     data,
+										Duration: time.Duration(cacheDuration) * time.Second,
+										Path:     request.Path,
+									})
+									if err != nil {
+										ErrorLog(err)
+										ServeError(conn, 500)
+										break
+									}
+								}
+							}
+
 							data = data[start : end+1]
 							headers["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", start, end, stat.Size())
+
 							ServeResponse(conn, ResponseServed{
 								Status:      206,
 								Body:        string(data),
@@ -186,6 +241,29 @@ func main() {
 							})
 							break
 						}
+
+						if matchedHost.EdgeCache.Enabled {
+							headers["X-Cache"] = "MISS"
+
+							if IsEdgeCacheEligible(request.Path, matchedHost.EdgeCache.Extensions) {
+								// Add to edge cache
+								cacheDuration := matchedHost.EdgeCache.Duration
+								if cacheDuration <= 0 {
+									cacheDuration = 3600 // Default to 1 hour
+								}
+								err = AddFileToEdgeCache(edgeCacheFile{
+									Data:     data,
+									Duration: time.Duration(cacheDuration) * time.Second,
+									Path:     request.Path,
+								})
+								if err != nil {
+									ErrorLog(err)
+									ServeError(conn, 500)
+									break
+								}
+							}
+						}
+
 						ServeResponse(conn, ResponseServed{
 							Status:      200,
 							Body:        string(data),

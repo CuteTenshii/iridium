@@ -10,8 +10,18 @@ import (
 
 type Host struct {
 	// The IP address or hostname that will be matched against the "Host" header of incoming requests.
-	Domain    string         `yaml:"domain"`
-	Locations []HostLocation `yaml:"locations"`
+	Domain    string          `yaml:"domain"`
+	Locations []HostLocation  `yaml:"locations"`
+	EdgeCache EdgeCacheConfig `yaml:"edge_cache,omitempty"`
+}
+
+type EdgeCacheConfig struct {
+	// Whether edge caching is enabled for this host. Default is false.
+	Enabled bool `yaml:"enabled"`
+	// Duration to cache files, in seconds.
+	Duration int `yaml:"duration"`
+	// File extensions to cache, e.g. [".js", ".css", ".png"]
+	Extensions []string `yaml:"extensions,omitempty"`
 }
 
 type HostLocation struct {
