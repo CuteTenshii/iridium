@@ -44,7 +44,7 @@ type WAFResult struct {
 // MakeWAFChecks applies WAF rules to the incoming HTTP request based on configuration settings.
 // Returns the WAFResult indicating if the request is blocked and the reason.
 func MakeWAFChecks(request HttpRequest) WAFResult {
-	enabled := GetConfigValue("waf.enabled", true).(bool)
+	enabled := GetConfigValue("waf.enabled", false).(bool)
 	if !enabled {
 		return WAFResult{Blocked: false}
 	}

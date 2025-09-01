@@ -39,7 +39,8 @@ server:
   show_server_version: true
 `
 
-var config map[string]interface{}
+var config *Config
+var configMap map[string]interface{}
 
 type Config struct {
 	WAF     WAFConfig     `yaml:"waf"`
@@ -104,17 +105,42 @@ func GetConfigPath() string {
 	return GetDataDirectory() + string(os.PathSeparator) + "config.yaml"
 }
 
+func GetConfig() (Config, error) {
+	var conf Config
+	path := GetConfigPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return conf, fmt.Errorf("failed to read config file: %v", err)
+	}
+	err = yaml.Unmarshal(data, &conf)
+	if err != nil {
+		return conf, fmt.Errorf("failed to parse config file: %v", err)
+	}
+
+	err = yaml.Unmarshal(data, &config)
+	if err != nil {
+		return conf, fmt.Errorf("failed to parse config file into map: %v", err)
+	}
+
+	return conf, nil
+}
+
 func GetConfigValue(key string, def interface{}) interface{} {
-	if config == nil {
-		CreateDefaultConfig()
+	if configMap == nil {
+		conf, err := GetConfig()
+		if err != nil {
+			fmt.Printf("Error loading config: %v\n", err)
+			return def
+		}
+		config = &conf
 		return def
 	}
-	if val, ok := config[key]; ok {
+	if val, ok := configMap[key]; ok {
 		return val
 	}
 	if strings.Contains(key, ".") {
 		parts := strings.Split(key, ".")
-		curr := config
+		curr := configMap
 		for i, part := range parts {
 			if v, ok := curr[part]; ok {
 				if i == len(parts)-1 {
