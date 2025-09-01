@@ -11,7 +11,10 @@ type edgeCacheFile struct {
 
 var edgeCache = make(map[string]edgeCacheFile)
 var edgeCacheExpiry = make(map[string]time.Time)
-var defaultExtensions = []string{".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".woff", ".woff2", ".ttf", ".eot", ".ico", ".json", ".html"}
+var defaultExtensions = []string{
+	".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".woff", ".woff2", ".ttf", ".eot", ".ico", ".mp4", ".webm",
+	".ogg", ".mp3", ".wav", ".flac", ".aac", ".txt", ".pdf",
+}
 
 func IsEdgeCacheEligible(path string, extensions []string) bool {
 	if len(extensions) == 0 {

@@ -208,44 +208,9 @@ func main() {
 								}
 							}
 
-							if matchedHost.EdgeCache.Enabled {
+							if matchedHost.EdgeCache.Enabled && IsEdgeCacheEligible(request.Path, matchedHost.EdgeCache.Extensions) {
 								headers["X-Cache"] = "MISS"
 
-								if IsEdgeCacheEligible(request.Path, matchedHost.EdgeCache.Extensions) {
-									// Add to edge cache
-									cacheDuration := matchedHost.EdgeCache.Duration
-									if cacheDuration <= 0 {
-										cacheDuration = 3600 // Default to 1 hour
-									}
-									err = AddFileToEdgeCache(edgeCacheFile{
-										Data:     data,
-										Duration: time.Duration(cacheDuration) * time.Second,
-										Path:     request.Path,
-									})
-									if err != nil {
-										ErrorLog(err)
-										ServeError(conn, 500)
-										break
-									}
-								}
-							}
-
-							data = data[start : end+1]
-							headers["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", start, end, stat.Size())
-
-							ServeResponse(conn, ResponseServed{
-								Status:      206,
-								Body:        string(data),
-								ContentType: &mimeType,
-								Headers:     headers,
-							})
-							break
-						}
-
-						if matchedHost.EdgeCache.Enabled {
-							headers["X-Cache"] = "MISS"
-
-							if IsEdgeCacheEligible(request.Path, matchedHost.EdgeCache.Extensions) {
 								// Add to edge cache
 								cacheDuration := matchedHost.EdgeCache.Duration
 								if cacheDuration <= 0 {
@@ -261,6 +226,37 @@ func main() {
 									ServeError(conn, 500)
 									break
 								}
+							}
+
+							data = data[start : end+1]
+							headers["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", start, end, stat.Size())
+
+							ServeResponse(conn, ResponseServed{
+								Status:      206,
+								Body:        string(data),
+								ContentType: &mimeType,
+								Headers:     headers,
+							})
+							break
+						}
+
+						if matchedHost.EdgeCache.Enabled && IsEdgeCacheEligible(request.Path, matchedHost.EdgeCache.Extensions) {
+							headers["X-Cache"] = "MISS"
+
+							// Add to edge cache
+							cacheDuration := matchedHost.EdgeCache.Duration
+							if cacheDuration <= 0 {
+								cacheDuration = 3600 // Default to 1 hour
+							}
+							err = AddFileToEdgeCache(edgeCacheFile{
+								Data:     data,
+								Duration: time.Duration(cacheDuration) * time.Second,
+								Path:     request.Path,
+							})
+							if err != nil {
+								ErrorLog(err)
+								ServeError(conn, 500)
+								break
 							}
 						}
 
