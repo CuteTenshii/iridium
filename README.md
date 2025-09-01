@@ -23,7 +23,15 @@ You can build and run Iridium using Docker with the following commands:
 
 ```bash
 docker build -t iridium .
-docker run -d -p 8080:8080 --name iridium_container iridium
+docker run -d -p 8080:8080 --name iridium -v ./iridium-data:/root/.iridium iridium
+```
+
+### macOS
+
+You can install Iridium on macOS using Homebrew:
+
+```bash
+brew install IridiumProxy/iridium/iridium
 ```
 
 ## Configuration
