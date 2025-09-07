@@ -297,6 +297,32 @@ func handleConnection(conn net.Conn, hosts []Host) {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		if os.Args[1] == "--version" || os.Args[1] == "-v" {
+			fmt.Printf("Iridium version %s\n", VERSION)
+			return
+		} else if os.Args[1] == "--help" || os.Args[1] == "-h" {
+			fmt.Println("Usage: iridium [options]")
+			fmt.Println("")
+			fmt.Println("Options:")
+			fmt.Println("  --version, -v    Show version information")
+			fmt.Println("  --help, -h       Show this help message")
+			fmt.Println("  validate         Validate the configuration file")
+			return
+		} else if os.Args[1] == "validate" {
+			println("Validating configuration...")
+			configPath := GetConfigPath()
+			if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
+				println("Configuration file does not exist. Did you run Iridium at least once?")
+				return
+			}
+
+			// TODO
+
+			return
+		}
+	}
+
 	port := 8080
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
