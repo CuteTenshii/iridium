@@ -19,7 +19,7 @@ var ClientIgnoredHeaders = []string{
 }
 var ServerIgnoredHeaders = []string{
 	"content-encoding", "content-length", "transfer-encoding", "connection", "keep-alive", "alt-svc", "server",
-	"content-type",
+	"content-type", "date", "vary",
 }
 
 // GetLocalIpWithoutPort extracts the IP address from a given address string, removing the port if present.
@@ -122,15 +122,8 @@ func MakeProxyRequest(conn net.Conn, request HttpRequest, targetHost string) Htt
 		ServeError(conn, request, 500)
 		return proxyRequest
 	}
-	contentType, _ := response.Headers["content-type"]
-	ServeResponse(conn, request, ResponseServed{
-		Status:      response.Status,
-		Body:        response.Body,
-		ContentType: &contentType,
-		Headers:     response.Headers,
-	})
 
-	return proxyRequest
+	return response
 }
 
 func ReadProxyResponse(conn net.Conn, path string) (HttpRequest, error) {

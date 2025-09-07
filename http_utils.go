@@ -6,6 +6,7 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"time"
 )
 
 func FallbackHtml() string {
@@ -83,6 +84,8 @@ func ServeResponse(conn net.Conn, request HttpRequest, resp ResponseServed) {
 	conn.Write([]byte("connection: close\r\n"))
 	conn.Write([]byte(fmt.Sprintf("content-length: %d\r\n", contentLength)))
 	conn.Write([]byte(fmt.Sprintf("content-type: %s\r\n", *resp.ContentType)))
+	conn.Write([]byte("vary: Accept-Encoding\r\n"))
+	conn.Write([]byte(fmt.Sprintf("date: %s\r\n", time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"))))
 	if isValidEncoding {
 		conn.Write([]byte(fmt.Sprintf("content-encoding: %s\r\n", encoding)))
 	}

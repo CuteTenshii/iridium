@@ -66,9 +66,9 @@ func ReadRequest(conn net.Conn) (HttpRequest, error) {
 		}
 		hparts := strings.SplitN(strings.TrimRight(line, "\r\n"), ":", 2)
 		if len(hparts) == 2 {
-			key := strings.TrimSpace(hparts[0])
-			value := strings.TrimSpace(hparts[1])
-			request.Headers[key] = value
+			k := strings.TrimSpace(strings.ToLower(hparts[0]))
+			v := strings.TrimSpace(hparts[1])
+			request.Headers[k] = v
 		} else {
 			log.Println("Malformed header:", line)
 			continue // Skip malformed headers

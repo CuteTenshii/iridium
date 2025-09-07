@@ -2,15 +2,19 @@ package main
 
 import "time"
 
-type edgeCacheFile struct {
+type EdgeCacheFile struct {
 	Data     []byte
 	Duration time.Duration
 	AddedAt  time.Time
 	Path     string
+	Headers  map[string]string
 }
 
-var edgeCache = make(map[string]edgeCacheFile)
+var edgeCache = make(map[string]EdgeCacheFile)
 var edgeCacheExpiry = make(map[string]time.Time)
+var edgeCacheHeaders = make(map[string]map[string]string)
+
+// Default extensions to cache if none are provided
 var defaultExtensions = []string{
 	".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".woff", ".woff2", ".ttf", ".eot", ".ico", ".mp4", ".webm",
 	".ogg", ".mp3", ".wav", ".flac", ".aac", ".txt", ".pdf",
@@ -28,28 +32,37 @@ func IsEdgeCacheEligible(path string, extensions []string) bool {
 	return false
 }
 
-func GetFileFromEdgeCache(key string) ([]byte, bool) {
+func GetFileFromEdgeCache(key string) (*EdgeCacheFile, bool) {
 	if data, exists := edgeCache[key]; exists {
-		if expiry, ok := edgeCacheExpiry[key]; ok {
-			if time.Now().Before(expiry) {
-				return data.Data, true
-			}
-			// Cache expired, remove it
-			delete(edgeCache, key)
-			delete(edgeCacheExpiry, key)
+		expiry, ok := edgeCacheExpiry[key]
+		if !ok {
+			return nil, false
 		}
+		if time.Now().Before(expiry) {
+			return &EdgeCacheFile{
+				Data:     data.Data,
+				Duration: data.Duration,
+				AddedAt:  data.AddedAt,
+				Headers:  edgeCacheHeaders[key],
+			}, true
+		}
+		// Cache expired, remove it
+		delete(edgeCache, key)
+		delete(edgeCacheExpiry, key)
 	}
 	return nil, false
 }
 
-func AddFileToEdgeCache(data edgeCacheFile) error {
+func AddFileToEdgeCache(data EdgeCacheFile) error {
 	now := time.Now()
 	data.AddedAt = now
 	if data.Duration <= 0 {
-		return nil // Do not cache if duration is zero or negative
+		// Default to 60 minutes if no duration is set
+		data.Duration = 60 * time.Minute
 	}
 	// If the cache already has this file, update it
 	edgeCache[data.Path] = data
 	edgeCacheExpiry[data.Path] = now.Add(data.Duration)
+	edgeCacheHeaders[data.Path] = data.Headers
 	return nil
 }
