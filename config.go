@@ -26,9 +26,16 @@ waf:
   block_proxies: true
 
   # List of countries to block (ISO 3166-1 alpha-2 codes). Example: ["CN", "RU"]
-  block_countries: []
+  blocked_countries: []
   # List of IPs or CIDR ranges to block.
-  block_ips: []
+  blocked_ips: []
+
+  captcha:
+    enabled: false
+    # Options: hcaptcha, recaptcha, turnstile
+    provider: hcaptcha
+    site_key: your-site-key
+    secret_key: your-secret-key
 
 logging:
   access_log: access.log
@@ -38,7 +45,7 @@ server:
   port: 8080
   # Print the server version in the "Server" header of HTTP responses.
   show_server_version: true
-  # Options: none, zstd
+  # Options: none, zstd, gzip, deflate
   encoding: none
 `
 

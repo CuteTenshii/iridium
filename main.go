@@ -16,15 +16,293 @@ import (
 
 const VERSION = "1.0.0"
 
+func handleConnection(conn net.Conn, hosts []Host) {
+	defer conn.Close()
+	request, err := ReadRequest(conn)
+	if err != nil {
+		ErrorLog(err)
+		return
+	}
+	remoteIp := conn.RemoteAddr().String()
+	host := request.Headers["host"]
+	if host == "" {
+		ServeError(conn, request, 400)
+		return
+	}
+	matchedHost := FindHost(hosts, host)
+	if matchedHost == nil {
+		ServeResponse(conn, request, ResponseServed{Status: 200, Body: FallbackHtml()})
+		return
+	}
+	waf := MakeWAFChecks(request)
+	if waf.Blocked {
+		if waf.CloseConnection {
+			return
+		}
+
+		serveCaptcha := GetConfigValue("waf.captcha.enabled", false).(bool)
+		if serveCaptcha {
+			sitekey := GetConfigValue("waf.captcha.site_key", "").(string)
+			if sitekey == "" {
+				ErrorLog(errors.New("captcha sitekey is not set in config"))
+				ServeError(conn, request, 403)
+				return
+			}
+			provider := GetConfigValue("waf.captcha.provider", "").(string)
+			if provider == "" {
+				ErrorLog(errors.New("captcha provider is not set in config"))
+				ServeError(conn, request, 403)
+				return
+			}
+			page := GetCaptchaHTML(sitekey, provider)
+			ServeResponse(conn, request, ResponseServed{Status: 403, Body: page})
+		} else {
+			ServeError(conn, request, 403)
+		}
+		return
+	}
+	RequestLog(request.Method, request.Path, request.Version, remoteIp)
+
+	if matchedHost.Domain == host {
+		for _, location := range matchedHost.Locations {
+			if IsLocationMatching(location.Match, request.Path) {
+				isCacheable := matchedHost.EdgeCache.Enabled && IsEdgeCacheEligible(request.Path, matchedHost.EdgeCache.Extensions)
+
+				if isCacheable {
+					if data, found := GetFileFromEdgeCache(request.Path); found {
+						mimeType := "application/octet-stream"
+						ext := filepath.Ext(request.Path)
+						if ext != "" {
+							if mt := mime.TypeByExtension(ext); mt != "" {
+								mimeType = mt
+							}
+						}
+
+						headers := make(map[string]string)
+						if location.Headers != nil {
+							for k, v := range *location.Headers {
+								k = strings.ToLower(k)
+								headers[k] = v
+							}
+						}
+						for k, v := range data.Headers {
+							k = strings.ToLower(k)
+							headers[k] = v
+						}
+
+						if strings.HasPrefix(mimeType, "video/") || strings.HasPrefix(mimeType, "audio/") {
+							headers["accept-ranges"] = "bytes"
+						}
+
+						headers["x-cache"] = "HIT"
+						headers["age"] = fmt.Sprintf("%d", int(time.Since(data.AddedAt).Seconds()))
+						ServeResponse(conn, request, ResponseServed{
+							Status:      200,
+							Body:        string(data.Data),
+							ContentType: &mimeType,
+							Headers:     headers,
+						})
+						return
+					}
+				}
+
+				if location.Content != nil {
+					ServeResponse(conn, request, ResponseServed{Status: 200, Body: *location.Content})
+					return
+				} else if location.Root != nil {
+					stat, err := os.Stat(*location.Root)
+					if err != nil || !stat.IsDir() {
+						if err != nil {
+							ErrorLog(err)
+						}
+						ServeError(conn, request, 500)
+						return
+					}
+
+					unesc, err := url.QueryUnescape(request.Path[1:])
+					if err != nil {
+						ServeError(conn, request, 400)
+						return
+					}
+					filePath := *location.Root + string(os.PathSeparator) + unesc
+					stat, err = os.Stat(filePath)
+					if err != nil || stat.IsDir() {
+						ServeError(conn, request, 404)
+						return
+					}
+
+					data, err := os.ReadFile(filePath)
+					if err != nil {
+						if errors.Is(err, os.ErrNotExist) {
+							ErrorLog(err)
+							ServeError(conn, request, 404)
+							return
+						} else if errors.Is(err, os.ErrPermission) {
+							ErrorLog(err)
+							ServeError(conn, request, 403)
+							return
+						} else if errors.Is(err, os.ErrInvalid) {
+							ErrorLog(err)
+							ServeError(conn, request, 400)
+							return
+						} else {
+							ErrorLog(err)
+							ServeError(conn, request, 500)
+							return
+						}
+					}
+
+					ext := filepath.Ext(filePath)
+					mimeType := mime.TypeByExtension(ext)
+					if mimeType == "" {
+						mimeType = "application/octet-stream"
+					}
+					headers := make(map[string]string)
+					if location.Headers != nil {
+						for k, v := range *location.Headers {
+							k = strings.ToLower(k)
+							headers[k] = v
+						}
+					}
+
+					if strings.HasPrefix(mimeType, "video/") || strings.HasPrefix(mimeType, "audio/") {
+						headers["accept-ranges"] = "bytes"
+					}
+					if request.Headers["range"] != "" {
+						headers["accept-ranges"] = "bytes"
+						counts := regexp.MustCompile(`bytes=(\d*)-(\d*)`).FindStringSubmatch(request.Headers["range"])
+						if len(counts) != 3 {
+							ServeError(conn, request, 400)
+							return
+						}
+						startStr, endStr := counts[1], counts[2]
+						var start, end int
+						if startStr == "" && endStr == "" {
+							ServeError(conn, request, 400)
+							return
+						} else if startStr == "" {
+							n, err := fmt.Sscanf(endStr, "%d", &end)
+							if n != 1 || err != nil {
+								ServeError(conn, request, 400)
+								return
+							}
+							if end > len(data) {
+								end = len(data)
+							}
+							start = len(data) - end
+							end = len(data) - 1
+						} else if endStr == "" {
+							n, err := fmt.Sscanf(startStr, "%d", &start)
+							if n != 1 || err != nil || start >= len(data) || start < 0 {
+								ServeError(conn, request, 400)
+								return
+							}
+							end = len(data) - 1
+						} else {
+							n1, err1 := fmt.Sscanf(startStr, "%d", &start)
+							n2, err2 := fmt.Sscanf(endStr, "%d", &end)
+							if n1 != 1 || err1 != nil || n2 != 1 || err2 != nil || start < 0 || end < 0 || start >= len(data) || end >= len(data) || start > end {
+								ServeError(conn, request, 400)
+								return
+							}
+						}
+
+						if isCacheable {
+							headers["x-cache"] = "MISS"
+							cacheDuration := matchedHost.EdgeCache.Duration
+							err = AddFileToEdgeCache(EdgeCacheFile{
+								Data:     data,
+								Duration: time.Duration(cacheDuration) * time.Second,
+								Path:     request.Path,
+								Headers:  headers,
+							})
+							if err != nil {
+								ErrorLog(err)
+								ServeError(conn, request, 500)
+								return
+							}
+						}
+
+						data = data[start : end+1]
+						headers["content-range"] = fmt.Sprintf("bytes %d-%d/%d", start, end, stat.Size())
+						ServeResponse(conn, request, ResponseServed{
+							Status:      206,
+							Body:        string(data),
+							ContentType: &mimeType,
+							Headers:     headers,
+						})
+						return
+					}
+
+					if isCacheable {
+						headers["x-cache"] = "MISS"
+						cacheDuration := matchedHost.EdgeCache.Duration
+						err = AddFileToEdgeCache(EdgeCacheFile{
+							Data:     data,
+							Duration: time.Duration(cacheDuration) * time.Second,
+							Path:     request.Path,
+							Headers:  headers,
+						})
+						if err != nil {
+							ErrorLog(err)
+							ServeError(conn, request, 500)
+							return
+						}
+					}
+
+					ServeResponse(conn, request, ResponseServed{
+						Status:      200,
+						Body:        string(data),
+						ContentType: &mimeType,
+						Headers:     headers,
+					})
+					return
+				} else if location.Proxy != nil {
+					response := MakeProxyRequest(conn, request, *location.Proxy)
+					if response.Headers == nil {
+						ServeError(conn, request, 500)
+						return
+					}
+
+					if isCacheable && response.Status == 200 {
+						if _, found := GetFileFromEdgeCache(request.Path); !found {
+							response.Headers["x-cache"] = "MISS"
+							cacheDuration := matchedHost.EdgeCache.Duration
+							err = AddFileToEdgeCache(EdgeCacheFile{
+								Data:     []byte(response.Body),
+								Duration: time.Duration(cacheDuration) * time.Second,
+								Path:     request.Path,
+								Headers:  response.Headers,
+							})
+						}
+					}
+
+					contentType, _ := response.Headers["content-type"]
+					ServeResponse(conn, request, ResponseServed{
+						Status:      response.Status,
+						Body:        response.Body,
+						ContentType: &contentType,
+						Headers:     response.Headers,
+					})
+					return
+				}
+			} else {
+				ServeError(conn, request, 404)
+				return
+			}
+		}
+	} else {
+		return
+	}
+}
+
 func main() {
 	port := 8080
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		if errors.Is(err, net.ErrClosed) {
-			// Handle the specific case where the network is closed
 			println("Network is closed")
 		} else {
-			// Handle other types of errors
 			println("Error occurred:", err.Error())
 		}
 	}
@@ -47,244 +325,6 @@ func main() {
 			println("Error accepting connection:", err.Error())
 			continue
 		}
-		request, err := ReadRequest(conn)
-		if err != nil {
-			ErrorLog(err)
-			// Close the connection on error. Client will see a connection reset error.
-			conn.Close()
-			continue
-		}
-		remoteIp := conn.RemoteAddr().String()
-		host := request.Headers["Host"]
-		if host == "" {
-			ServeError(conn, request, 400)
-			continue
-		}
-		matchedHost := FindHost(hosts, host)
-		if matchedHost == nil {
-			ServeResponse(conn, request, ResponseServed{Status: 200, Body: FallbackHtml()})
-			continue
-		}
-		waf := MakeWAFChecks(request)
-		if waf.Blocked {
-			if waf.CloseConnection {
-				conn.Close()
-				continue
-			}
-			ServeError(conn, request, 403)
-			continue
-		}
-		if matchedHost.Domain == host {
-			for _, location := range matchedHost.Locations {
-				if IsLocationMatching(location.Match, request.Path) {
-					if IsEdgeCacheEligible(request.Path, matchedHost.EdgeCache.Extensions) {
-						if data, found := GetFileFromEdgeCache(request.Path); found {
-							mimeType := "application/octet-stream"
-							ext := filepath.Ext(request.Path)
-							if ext != "" {
-								if mt := mime.TypeByExtension(ext); mt != "" {
-									mimeType = mt
-								}
-							}
-							headers := make(map[string]string)
-							if location.Headers != nil {
-								for k, v := range *location.Headers {
-									headers[k] = v
-								}
-							}
-							if strings.HasPrefix(mimeType, "video/") || strings.HasPrefix(mimeType, "audio/") {
-								headers["accept-ranges"] = "bytes"
-							}
-							headers["x-cache"] = "HIT"
-							ServeResponse(conn, request, ResponseServed{
-								Status:      200,
-								Body:        string(data),
-								ContentType: &mimeType,
-								Headers:     headers,
-							})
-							break
-						}
-					}
-
-					// Handle the request based on the location configuration
-					if location.Content != nil {
-						ServeResponse(conn, request, ResponseServed{Status: 200, Body: *location.Content})
-						break
-					} else if location.Root != nil {
-						stat, err := os.Stat(*location.Root)
-						if err != nil || !stat.IsDir() {
-							if err != nil {
-								ErrorLog(err)
-							}
-							ServeError(conn, request, 500)
-							break
-						}
-						unesc, err := url.QueryUnescape(request.Path[1:])
-						if err != nil {
-							ServeError(conn, request, 400)
-							break
-						}
-						filePath := *location.Root + string(os.PathSeparator) + unesc
-						stat, err = os.Stat(filePath)
-						if err != nil || stat.IsDir() {
-							ServeError(conn, request, 404)
-							break
-						}
-						data, err := os.ReadFile(filePath)
-						if err != nil {
-							if errors.Is(err, os.ErrNotExist) {
-								ErrorLog(err)
-								ServeError(conn, request, 404)
-								break
-							} else if errors.Is(err, os.ErrPermission) {
-								ErrorLog(err)
-								ServeError(conn, request, 403)
-								break
-							} else if errors.Is(err, os.ErrInvalid) {
-								ErrorLog(err)
-								ServeError(conn, request, 400)
-								break
-							} else {
-								ErrorLog(err)
-								ServeError(conn, request, 500)
-								break
-							}
-						}
-						ext := filepath.Ext(filePath)
-						mimeType := mime.TypeByExtension(ext)
-						if mimeType == "" {
-							mimeType = "application/octet-stream"
-						}
-						headers := make(map[string]string)
-						if location.Headers != nil {
-							for k, v := range *location.Headers {
-								headers[k] = v
-							}
-						}
-						if strings.HasPrefix(mimeType, "video/") || strings.HasPrefix(mimeType, "audio/") {
-							headers["accept-ranges"] = "bytes"
-						}
-						if request.Headers["range"] != "" {
-							headers["accept-ranges"] = "bytes"
-							counts := regexp.MustCompile(`bytes=(\d*)-(\d*)`).FindStringSubmatch(request.Headers["range"])
-							if len(counts) != 3 {
-								ServeError(conn, request, 400)
-								break
-							}
-							startStr, endStr := counts[1], counts[2]
-							var start, end int
-							if startStr == "" && endStr == "" {
-								ServeError(conn, request, 400)
-								break
-							} else if startStr == "" {
-								// suffix byte range: bytes=-N
-								n, err := fmt.Sscanf(endStr, "%d", &end)
-								if n != 1 || err != nil {
-									ServeError(conn, request, 400)
-									break
-								}
-								if end > len(data) {
-									end = len(data)
-								}
-								start = len(data) - end
-								end = len(data) - 1
-							} else if endStr == "" {
-								// open-ended byte range: bytes=N-
-								n, err := fmt.Sscanf(startStr, "%d", &start)
-								if n != 1 || err != nil || start >= len(data) || start < 0 {
-									ServeError(conn, request, 400)
-									break
-								}
-								end = len(data) - 1
-							} else {
-								// specific byte range: bytes=N-M
-								n1, err1 := fmt.Sscanf(startStr, "%d", &start)
-								n2, err2 := fmt.Sscanf(endStr, "%d", &end)
-								if n1 != 1 || err1 != nil || n2 != 1 || err2 != nil || start < 0 || end < 0 || start >= len(data) || end >= len(data) || start > end {
-									ServeError(conn, request, 400)
-									break
-								}
-							}
-
-							if matchedHost.EdgeCache.Enabled && IsEdgeCacheEligible(request.Path, matchedHost.EdgeCache.Extensions) {
-								headers["x-cache"] = "MISS"
-
-								// Add to edge cache
-								cacheDuration := matchedHost.EdgeCache.Duration
-								if cacheDuration <= 0 {
-									cacheDuration = 3600 // Default to 1 hour
-								}
-								err = AddFileToEdgeCache(edgeCacheFile{
-									Data:     data,
-									Duration: time.Duration(cacheDuration) * time.Second,
-									Path:     request.Path,
-								})
-								if err != nil {
-									ErrorLog(err)
-									ServeError(conn, request, 500)
-									break
-								}
-							}
-
-							data = data[start : end+1]
-							headers["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", start, end, stat.Size())
-
-							ServeResponse(conn, request, ResponseServed{
-								Status:      206,
-								Body:        string(data),
-								ContentType: &mimeType,
-								Headers:     headers,
-							})
-							break
-						}
-
-						if matchedHost.EdgeCache.Enabled && IsEdgeCacheEligible(request.Path, matchedHost.EdgeCache.Extensions) {
-							headers["x-cache"] = "MISS"
-
-							// Add to edge cache
-							cacheDuration := matchedHost.EdgeCache.Duration
-							if cacheDuration <= 0 {
-								cacheDuration = 3600 // Default to 1 hour
-							}
-							err = AddFileToEdgeCache(edgeCacheFile{
-								Data:     data,
-								Duration: time.Duration(cacheDuration) * time.Second,
-								Path:     request.Path,
-							})
-							if err != nil {
-								ErrorLog(err)
-								ServeError(conn, request, 500)
-								break
-							}
-						}
-
-						ServeResponse(conn, request, ResponseServed{
-							Status:      200,
-							Body:        string(data),
-							ContentType: &mimeType,
-							Headers:     headers,
-						})
-						break
-					} else if location.Proxy != nil {
-						proxyRequest := MakeProxyRequest(conn, request, *location.Proxy)
-						if proxyRequest.Headers == nil {
-							ServeError(conn, request, 500)
-							break
-						}
-						// Successfully proxied the request, close the original connection
-						conn.Close()
-						break
-					}
-				} else {
-					ServeError(conn, request, 404)
-					break
-				}
-			}
-		} else {
-			conn.Close()
-			continue
-		}
-
-		RequestLog(request.Method, request.Path, request.Version, remoteIp)
+		go handleConnection(conn, hosts)
 	}
 }
