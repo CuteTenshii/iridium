@@ -57,15 +57,12 @@ func main() {
 		remoteIp := conn.RemoteAddr().String()
 		host := request.Headers["Host"]
 		if host == "" {
-			ServeResponse(conn, ResponseServed{
-				Status: 400,
-				Body:   "Bad Request: Missing Host header",
-			})
+			ServeError(conn, request, 400)
 			continue
 		}
 		matchedHost := FindHost(hosts, host)
 		if matchedHost == nil {
-			ServeResponse(conn, ResponseServed{Status: 200, Body: FallbackHtml()})
+			ServeResponse(conn, request, ResponseServed{Status: 200, Body: FallbackHtml()})
 			continue
 		}
 		waf := MakeWAFChecks(request)
@@ -74,7 +71,7 @@ func main() {
 				conn.Close()
 				continue
 			}
-			ServeError(conn, 403)
+			ServeError(conn, request, 403)
 			continue
 		}
 		if matchedHost.Domain == host {
@@ -96,10 +93,10 @@ func main() {
 								}
 							}
 							if strings.HasPrefix(mimeType, "video/") || strings.HasPrefix(mimeType, "audio/") {
-								headers["Accept-Ranges"] = "bytes"
+								headers["accept-ranges"] = "bytes"
 							}
-							headers["X-Cache"] = "HIT"
-							ServeResponse(conn, ResponseServed{
+							headers["x-cache"] = "HIT"
+							ServeResponse(conn, request, ResponseServed{
 								Status:      200,
 								Body:        string(data),
 								ContentType: &mimeType,
@@ -111,44 +108,45 @@ func main() {
 
 					// Handle the request based on the location configuration
 					if location.Content != nil {
-						ServeResponse(conn, ResponseServed{Status: 200, Body: *location.Content})
+						ServeResponse(conn, request, ResponseServed{Status: 200, Body: *location.Content})
 						break
 					} else if location.Root != nil {
 						stat, err := os.Stat(*location.Root)
 						if err != nil || !stat.IsDir() {
-							ServeResponse(conn, ResponseServed{
-								Status: 500,
-								Body:   "Internal Server Error: Invalid root directory",
-							})
+							if err != nil {
+								ErrorLog(err)
+							}
+							ServeError(conn, request, 500)
 							break
 						}
 						unesc, err := url.QueryUnescape(request.Path[1:])
 						if err != nil {
-							ServeError(conn, 400)
+							ServeError(conn, request, 400)
 							break
 						}
 						filePath := *location.Root + string(os.PathSeparator) + unesc
 						stat, err = os.Stat(filePath)
 						if err != nil || stat.IsDir() {
-							ServeError(conn, 404)
+							ServeError(conn, request, 404)
 							break
 						}
 						data, err := os.ReadFile(filePath)
 						if err != nil {
 							if errors.Is(err, os.ErrNotExist) {
-								ServeError(conn, 404)
+								ErrorLog(err)
+								ServeError(conn, request, 404)
 								break
 							} else if errors.Is(err, os.ErrPermission) {
-								ServeError(conn, 403)
+								ErrorLog(err)
+								ServeError(conn, request, 403)
 								break
 							} else if errors.Is(err, os.ErrInvalid) {
-								ServeError(conn, 400)
+								ErrorLog(err)
+								ServeError(conn, request, 400)
 								break
 							} else {
-								ServeResponse(conn, ResponseServed{
-									Status: 500,
-									Body:   "Internal Server Error: " + err.Error(),
-								})
+								ErrorLog(err)
+								ServeError(conn, request, 500)
 								break
 							}
 						}
@@ -164,25 +162,25 @@ func main() {
 							}
 						}
 						if strings.HasPrefix(mimeType, "video/") || strings.HasPrefix(mimeType, "audio/") {
-							headers["Accept-Ranges"] = "bytes"
+							headers["accept-ranges"] = "bytes"
 						}
-						if request.Headers["Range"] != "" {
-							headers["Accept-Ranges"] = "bytes"
-							counts := regexp.MustCompile(`bytes=(\d*)-(\d*)`).FindStringSubmatch(request.Headers["Range"])
+						if request.Headers["range"] != "" {
+							headers["accept-ranges"] = "bytes"
+							counts := regexp.MustCompile(`bytes=(\d*)-(\d*)`).FindStringSubmatch(request.Headers["range"])
 							if len(counts) != 3 {
-								ServeError(conn, 400)
+								ServeError(conn, request, 400)
 								break
 							}
 							startStr, endStr := counts[1], counts[2]
 							var start, end int
 							if startStr == "" && endStr == "" {
-								ServeError(conn, 400)
+								ServeError(conn, request, 400)
 								break
 							} else if startStr == "" {
 								// suffix byte range: bytes=-N
 								n, err := fmt.Sscanf(endStr, "%d", &end)
 								if n != 1 || err != nil {
-									ServeError(conn, 400)
+									ServeError(conn, request, 400)
 									break
 								}
 								if end > len(data) {
@@ -194,7 +192,7 @@ func main() {
 								// open-ended byte range: bytes=N-
 								n, err := fmt.Sscanf(startStr, "%d", &start)
 								if n != 1 || err != nil || start >= len(data) || start < 0 {
-									ServeError(conn, 400)
+									ServeError(conn, request, 400)
 									break
 								}
 								end = len(data) - 1
@@ -203,13 +201,13 @@ func main() {
 								n1, err1 := fmt.Sscanf(startStr, "%d", &start)
 								n2, err2 := fmt.Sscanf(endStr, "%d", &end)
 								if n1 != 1 || err1 != nil || n2 != 1 || err2 != nil || start < 0 || end < 0 || start >= len(data) || end >= len(data) || start > end {
-									ServeError(conn, 400)
+									ServeError(conn, request, 400)
 									break
 								}
 							}
 
 							if matchedHost.EdgeCache.Enabled && IsEdgeCacheEligible(request.Path, matchedHost.EdgeCache.Extensions) {
-								headers["X-Cache"] = "MISS"
+								headers["x-cache"] = "MISS"
 
 								// Add to edge cache
 								cacheDuration := matchedHost.EdgeCache.Duration
@@ -223,7 +221,7 @@ func main() {
 								})
 								if err != nil {
 									ErrorLog(err)
-									ServeError(conn, 500)
+									ServeError(conn, request, 500)
 									break
 								}
 							}
@@ -231,7 +229,7 @@ func main() {
 							data = data[start : end+1]
 							headers["Content-Range"] = fmt.Sprintf("bytes %d-%d/%d", start, end, stat.Size())
 
-							ServeResponse(conn, ResponseServed{
+							ServeResponse(conn, request, ResponseServed{
 								Status:      206,
 								Body:        string(data),
 								ContentType: &mimeType,
@@ -241,7 +239,7 @@ func main() {
 						}
 
 						if matchedHost.EdgeCache.Enabled && IsEdgeCacheEligible(request.Path, matchedHost.EdgeCache.Extensions) {
-							headers["X-Cache"] = "MISS"
+							headers["x-cache"] = "MISS"
 
 							// Add to edge cache
 							cacheDuration := matchedHost.EdgeCache.Duration
@@ -255,12 +253,12 @@ func main() {
 							})
 							if err != nil {
 								ErrorLog(err)
-								ServeError(conn, 500)
+								ServeError(conn, request, 500)
 								break
 							}
 						}
 
-						ServeResponse(conn, ResponseServed{
+						ServeResponse(conn, request, ResponseServed{
 							Status:      200,
 							Body:        string(data),
 							ContentType: &mimeType,
@@ -270,7 +268,7 @@ func main() {
 					} else if location.Proxy != nil {
 						proxyRequest := MakeProxyRequest(conn, request, *location.Proxy)
 						if proxyRequest.Headers == nil {
-							ServeError(conn, 500)
+							ServeError(conn, request, 500)
 							break
 						}
 						// Successfully proxied the request, close the original connection
@@ -278,7 +276,7 @@ func main() {
 						break
 					}
 				} else {
-					ServeError(conn, 404)
+					ServeError(conn, request, 404)
 					break
 				}
 			}

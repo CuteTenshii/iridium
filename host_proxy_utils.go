@@ -3,19 +3,59 @@ package main
 import (
 	"bufio"
 	"crypto/tls"
-	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http/httputil"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
-var IgnoredHeaders = []string{
-	"X-Forwarded-For",
+var ClientIgnoredHeaders = []string{
+	"x-forwarded-for", "host",
+}
+var ServerIgnoredHeaders = []string{
+	"content-encoding", "content-length", "transfer-encoding", "connection", "keep-alive", "alt-svc", "server",
+	"content-type",
 }
 
+// GetLocalIpWithoutPort extracts the IP address from a given address string, removing the port if present.
+func GetLocalIpWithoutPort(addr string) string {
+	split := strings.Split(addr, ":")
+	if len(split) < 2 {
+		return addr
+	}
+	return strings.TrimSuffix(addr, ":"+split[len(split)-1])
+}
+
+// DialTarget tries to connect to the target host using TLS first, and falls back to plain TCP if TLS fails due to the target not supporting it.
+func DialTarget(targetHost string) (net.Conn, error) {
+	// Timeout after 90 seconds
+	gatewayTimeout := 90 * time.Second
+	dialer := &net.Dialer{Timeout: gatewayTimeout}
+	tlsConn, err := tls.DialWithDialer(dialer, "tcp", targetHost, &tls.Config{})
+	if err == nil {
+		_ = tlsConn.SetDeadline(time.Now().Add(gatewayTimeout))
+		return tlsConn, nil
+	}
+
+	// Fallback to plain TCP if TLS handshake fails
+	if strings.Contains(err.Error(), "first record does not look like a TLS handshake") {
+		conn, err := dialer.Dial("tcp", targetHost)
+		if err != nil {
+			return nil, err
+		}
+		_ = conn.SetDeadline(time.Now().Add(gatewayTimeout))
+		return conn, nil
+	}
+
+	return nil, err
+}
+
+// MakeProxyRequest constructs and sends a proxied HTTP request to the target host, then reads and serves the response back to the client.
 func MakeProxyRequest(conn net.Conn, request HttpRequest, targetHost string) HttpRequest {
 	proxyRequest := HttpRequest{
 		Method:  request.Method,
@@ -26,45 +66,43 @@ func MakeProxyRequest(conn net.Conn, request HttpRequest, targetHost string) Htt
 		Status:  200,
 	}
 	for k, v := range request.Headers {
-		if !slices.Contains(IgnoredHeaders, k) {
+		k = strings.TrimSpace(strings.ToLower(k))
+		if !slices.Contains(ClientIgnoredHeaders, k) {
 			proxyRequest.Headers[k] = v
 		}
 	}
+
+	// Ensure "Host" header is set correctly
 	if strings.Contains(targetHost, ":") {
 		// If targetHost includes a port, extract just the hostname part for the Host header
-		hostParts := strings.Split(targetHost, ":")
-		proxyRequest.Headers["Host"] = hostParts[0]
+		proxyRequest.Headers["host"] = GetLocalIpWithoutPort(targetHost)
 	} else {
-		proxyRequest.Headers["Host"] = targetHost
+		proxyRequest.Headers["host"] = targetHost
+		// Default to port 80 if no port is specified
 		targetHost = targetHost + ":80"
 	}
 	localAddr := conn.LocalAddr().String()
-	proxyRequest.Headers["X-Forwarded-For"] = strings.Split(localAddr, ":")[0]
-	proxyRequest.Headers["Accept-Encoding"] = ""
+	proxyRequest.Headers["x-forwarded-for"] = GetLocalIpWithoutPort(localAddr)
+	proxyRequest.Headers["accept-encoding"] = "gzip, deflate, zstd"
 
-	req, err := tls.Dial("tcp", targetHost, &tls.Config{})
+	req, err := DialTarget(targetHost)
 	if err != nil {
-		if errors.Is(err, net.ErrWriteToConnected) {
-			ServeError(conn, 502)
-			conn.Close()
-			return proxyRequest
-		} else if strings.Contains(err.Error(), "connection refused") {
-			ServeError(conn, 502)
-			conn.Close()
-			return proxyRequest
-		} else if strings.Contains(err.Error(), "i/o timeout") {
-			ServeError(conn, 504)
+		if strings.Contains(err.Error(), "i/o timeout") {
+			ErrorLog(err)
+			ServeError(conn, request, 504)
 			conn.Close()
 			return proxyRequest
 		} else {
-			ServeError(conn, 502)
+			ErrorLog(err)
+			ServeError(conn, request, 502)
 			conn.Close()
 			return proxyRequest
 		}
 	}
+
 	req.Write([]byte(request.Method + " " + request.Path + " " + request.Version + CRLF))
 	for k, v := range proxyRequest.Headers {
-		req.Write([]byte(k + ": " + v + CRLF))
+		req.Write([]byte(fmt.Sprintf("%s: %s\r\n", k, v)))
 	}
 	req.Write([]byte(CRLF))
 	if proxyRequest.Body != "" {
@@ -74,16 +112,18 @@ func MakeProxyRequest(conn net.Conn, request HttpRequest, targetHost string) Htt
 	var response HttpRequest
 	response, err = ReadProxyResponse(req, request.Path)
 	if err != nil {
+		if strings.Contains(err.Error(), "i/o timeout") {
+			ErrorLog(err)
+			ServeError(conn, request, 504)
+			conn.Close()
+			return proxyRequest
+		}
 		log.Println("Error reading proxy response:", err.Error())
-		ServeError(conn, 502)
-		conn.Close()
+		ServeError(conn, request, 500)
 		return proxyRequest
 	}
-	contentType, ok := response.Headers["Content-Type"]
-	if !ok {
-		contentType = "text/html; charset=utf-8"
-	}
-	ServeResponse(conn, ResponseServed{
+	contentType, _ := response.Headers["content-type"]
+	ServeResponse(conn, request, ResponseServed{
 		Status:      response.Status,
 		Body:        response.Body,
 		ContentType: &contentType,
@@ -134,21 +174,47 @@ func ReadProxyResponse(conn net.Conn, path string) (HttpRequest, error) {
 		}
 		hparts := strings.SplitN(strings.TrimRight(line, "\r\n"), ":", 2)
 		if len(hparts) == 2 {
-			key := strings.TrimSpace(hparts[0])
-			value := strings.TrimSpace(hparts[1])
-			response.Headers[key] = value
+			k := strings.TrimSpace(strings.ToLower(hparts[0]))
+			v := strings.TrimSpace(hparts[1])
+			response.Headers[k] = v
 		} else {
 			log.Println("Malformed header:", line)
 			continue // Skip malformed headers
 		}
 	}
 
-	if te, ok := response.Headers["Transfer-Encoding"]; ok && strings.EqualFold(te, "chunked") {
+	response.Body = ""
+	if response.Status < 100 || response.Status > 599 {
+		return response, fmt.Errorf("invalid status code: %d", response.Status)
+		// Status codes: 204 (No Content), 304 (Not Modified), and 1xx (Informational) do not have a body
+	} else if response.Status == 204 || response.Status == 304 || (response.Status >= 100 && response.Status < 200) {
+		return response, nil
+	}
+
+	if ce, ok := response.Headers["content-encoding"]; ok && (strings.EqualFold(ce, "gzip") || strings.EqualFold(ce, "zstd") ||
+		strings.EqualFold(ce, "deflate")) {
+		// Handle chunked transfer encoding if present
+		if strings.EqualFold(response.Headers["transfer-encoding"], "chunked") {
+			reader = bufio.NewReader(httputil.NewChunkedReader(reader))
+		}
+		decompressed, err := DecompressBody(reader, strings.ToLower(ce))
+		if err != nil {
+			return response, fmt.Errorf("failed to decompress response body: %v", err)
+		}
+		bodyBytes, err := io.ReadAll(decompressed)
+		if err != nil {
+			return response, fmt.Errorf("failed to read decompressed response body: %v", err)
+		}
+		response.Body = string(bodyBytes)
+		return response, nil
+	}
+
+	if te, ok := response.Headers["transfer-encoding"]; ok && strings.EqualFold(te, "chunked") {
 		response.Body, err = ReadChunkedBody(reader)
 		if err != nil {
 			return response, err
 		}
-	} else if cl, ok := response.Headers["Content-Length"]; ok {
+	} else if cl, ok := response.Headers["content-length"]; ok {
 		response.Body, err = ReadContentLengthBody(reader, cl)
 		if err != nil {
 			return response, err

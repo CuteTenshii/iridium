@@ -76,12 +76,12 @@ func ReadRequest(conn net.Conn) (HttpRequest, error) {
 	}
 
 	// Read body if Content-Length is specified
-	if te, ok := request.Headers["Transfer-Encoding"]; ok && strings.EqualFold(te, "chunked") {
+	if te, ok := request.Headers["transfer-encoding"]; ok && strings.EqualFold(te, "chunked") {
 		request.Body, err = ReadChunkedBody(reader)
 		if err != nil {
 			return request, err
 		}
-	} else if cl, ok := request.Headers["Content-Length"]; ok {
+	} else if cl, ok := request.Headers["content-length"]; ok {
 		request.Body, err = ReadContentLengthBody(reader, cl)
 		if err != nil {
 			return request, err

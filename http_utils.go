@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net"
+	"slices"
 	"strings"
 )
 
@@ -26,6 +28,25 @@ func FallbackHtml() string {
 	return strings.TrimSpace(html)
 }
 
+// GetContentBody returns the body as a string and the content length
+func GetContentBody(body []byte, encoding string) (string, int) {
+	if encoding == "zstd" || encoding == "gzip" || encoding == "deflate" {
+		enc, err := CompressData(strings.NewReader(string(body)), encoding)
+		if err != nil {
+			fmt.Printf("Error compressing response: %v\n", err)
+			return string(body), len(body)
+		}
+		ioData, err := io.ReadAll(enc)
+		if err != nil {
+			fmt.Printf("Error reading compressed response: %v\n", err)
+			return string(body), len(body)
+		}
+		return string(ioData), len(ioData)
+	}
+
+	return string(body), len(body)
+}
+
 type ResponseServed struct {
 	Status      int
 	Body        string
@@ -33,31 +54,53 @@ type ResponseServed struct {
 	Headers     map[string]string
 }
 
-func ServeResponse(conn net.Conn, resp ResponseServed) {
+func ServeResponse(conn net.Conn, request HttpRequest, resp ResponseServed) {
+	var encoding string
+	clientEncodings := request.Headers["accept-encoding"]
+	if clientEncodings != "" {
+		clientEncodings := strings.Split(clientEncodings, ",")
+		for _, enc := range clientEncodings {
+			enc = strings.TrimSpace(enc)
+			if enc == "zstd" || enc == "gzip" || enc == "deflate" {
+				encoding = enc
+				break
+			}
+		}
+	}
+	if encoding == "" {
+		// Fallback to no encoding if client does not support any
+		encoding = "none"
+	}
+	isValidEncoding := encoding == "zstd" || encoding == "gzip" || encoding == "deflate"
+	contentBody, contentLength := GetContentBody([]byte(resp.Body), encoding)
+
 	if resp.ContentType == nil {
 		defaultType := "text/html; charset=utf-8"
 		resp.ContentType = &defaultType
 	}
 	conn.Write([]byte(fmt.Sprintf("HTTP/1.1 %d\r\n", resp.Status)))
-	conn.Write([]byte(fmt.Sprintf("Server: Iridium/%s\r\n", VERSION)))
-	conn.Write([]byte("Connection: close\r\n"))
-	conn.Write([]byte(fmt.Sprintf("Content-Length: %d\r\n", len(resp.Body))))
-	conn.Write([]byte(fmt.Sprintf("Content-Type: %s\r\n", *resp.ContentType)))
+	conn.Write([]byte(fmt.Sprintf("server: Iridium/%s\r\n", VERSION)))
+	conn.Write([]byte("connection: close\r\n"))
+	conn.Write([]byte(fmt.Sprintf("content-length: %d\r\n", contentLength)))
+	conn.Write([]byte(fmt.Sprintf("content-type: %s\r\n", *resp.ContentType)))
+	if isValidEncoding {
+		conn.Write([]byte(fmt.Sprintf("content-encoding: %s\r\n", encoding)))
+	}
 	if resp.Headers != nil {
 		for k, v := range resp.Headers {
-			if k == "Content-Length" || k == "Content-Type" || k == "Server" || k == "Connection" || k == "Date" ||
-				k == "Content-Encoding" || k == "Transfer-Encoding" {
+			k = strings.TrimSpace(strings.ToLower(k))
+			if slices.Contains(ServerIgnoredHeaders, k) {
 				continue
 			}
 			conn.Write([]byte(fmt.Sprintf("%s: %s\r\n", k, v)))
 		}
 	}
 	conn.Write([]byte("\r\n"))
-	conn.Write([]byte(resp.Body))
+	conn.Write([]byte(contentBody))
 	conn.Close()
 }
 
-func ServeError(conn net.Conn, status int) {
+func ServeError(conn net.Conn, request HttpRequest, status int) {
 	var statusText string
 	switch status {
 	case 400:
@@ -81,7 +124,7 @@ func ServeError(conn net.Conn, status int) {
 		"<!DOCTYPE html><html><head><title>%s</title></head><body><center><h1>%d %s</h1><hr><p>Iridium v%s</p></center></body></html>",
 		statusText, status, statusText, VERSION,
 	)
-	ServeResponse(conn, ResponseServed{
+	ServeResponse(conn, request, ResponseServed{
 		Status: status,
 		Body:   body,
 	})

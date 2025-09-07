@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -37,10 +38,12 @@ server:
   port: 8080
   # Print the server version in the "Server" header of HTTP responses.
   show_server_version: true
+  # Options: none, zstd
+  encoding: none
 `
 
 var config *Config
-var configMap map[string]interface{}
+var configMap *map[string]interface{}
 
 type Config struct {
 	WAF     WAFConfig     `yaml:"waf"`
@@ -66,8 +69,9 @@ type LoggingConfig struct {
 }
 
 type ServerConfig struct {
-	Port              int  `yaml:"port"`
-	ShowServerVersion bool `yaml:"show_server_version"`
+	Port              int    `yaml:"port"`
+	ShowServerVersion bool   `yaml:"show_server_version"`
+	Encoding          string `yaml:"encoding"`
 }
 
 func CreateDefaultConfig() error {
@@ -106,23 +110,32 @@ func GetConfigPath() string {
 }
 
 func GetConfig() (Config, error) {
-	var conf Config
 	path := GetConfigPath()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return conf, fmt.Errorf("failed to read config file: %v", err)
-	}
-	err = yaml.Unmarshal(data, &conf)
-	if err != nil {
-		return conf, fmt.Errorf("failed to parse config file: %v", err)
+		if errors.Is(err, os.ErrNotExist) {
+			err := CreateDefaultConfig()
+			if err != nil {
+				return Config{}, fmt.Errorf("failed to create default config file: %v", err)
+			}
+			return GetConfig()
+		}
+		return Config{}, fmt.Errorf("failed to read config file: %v", err)
 	}
 
 	err = yaml.Unmarshal(data, &config)
 	if err != nil {
-		return conf, fmt.Errorf("failed to parse config file into map: %v", err)
+		return Config{}, fmt.Errorf("failed to parse config file into map: %v", err)
 	}
 
-	return conf, nil
+	var confMap map[string]interface{}
+	err = yaml.Unmarshal(data, &confMap)
+	if err != nil {
+		return *config, fmt.Errorf("failed to parse config file into map: %v", err)
+	}
+	configMap = &confMap
+
+	return *config, nil
 }
 
 func GetConfigValue(key string, def interface{}) interface{} {
@@ -135,19 +148,19 @@ func GetConfigValue(key string, def interface{}) interface{} {
 		config = &conf
 		return def
 	}
-	if val, ok := configMap[key]; ok {
+	if val, ok := (*configMap)[key]; ok {
 		return val
 	}
 	if strings.Contains(key, ".") {
 		parts := strings.Split(key, ".")
 		curr := configMap
 		for i, part := range parts {
-			if v, ok := curr[part]; ok {
+			if v, ok := (*curr)[part]; ok {
 				if i == len(parts)-1 {
 					return v
 				}
 				if nextMap, ok := v.(map[string]interface{}); ok {
-					curr = nextMap
+					curr = &nextMap
 				} else {
 					return def
 				}

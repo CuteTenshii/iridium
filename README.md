@@ -13,6 +13,7 @@
 - Lightweight and fast
 - Has a built-in WAF (Web Application Firewall), configurable to block libraries (such as curl, wget, etc.), crawlers, specific IPs, and more.
 - Edge caching support for static files: caches files in memory for faster delivery
+- Compression support (gzip, deflate, zstd)
 
 ## Installation
 
