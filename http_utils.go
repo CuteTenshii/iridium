@@ -59,6 +59,10 @@ func ServeResponse(conn net.Conn, request HttpRequest, resp ResponseServed) {
 	var encoding string
 	clientEncodings := request.Headers["accept-encoding"]
 	if clientEncodings != "" {
+		// If client accepts any encoding, prefer "zstd, gzip, deflate" in that order
+		if clientEncodings == "*" {
+			clientEncodings = "zstd, gzip, deflate"
+		}
 		clientEncodings := strings.Split(clientEncodings, ",")
 		for _, enc := range clientEncodings {
 			enc = strings.TrimSpace(enc)
@@ -68,6 +72,7 @@ func ServeResponse(conn net.Conn, request HttpRequest, resp ResponseServed) {
 			}
 		}
 	}
+
 	if encoding == "" {
 		// Fallback to no encoding if client does not support any
 		encoding = "none"
@@ -120,6 +125,8 @@ func ErrorHTML(status int) string {
 		statusText = "Forbidden"
 	case 404:
 		statusText = "Not Found"
+	case 416:
+		statusText = "Range Not Satisfiable"
 	case 500:
 		statusText = "Internal Server Error"
 	case 502:

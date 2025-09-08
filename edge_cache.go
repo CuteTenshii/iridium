@@ -1,6 +1,10 @@
 package main
 
-import "time"
+import (
+	"slices"
+	"strings"
+	"time"
+)
 
 type EdgeCacheFile struct {
 	Data     []byte
@@ -10,6 +14,10 @@ type EdgeCacheFile struct {
 	Headers  map[string]string
 }
 
+// edgeCacheIgnoredHeaders are headers that should not be cached or forwarded to clients when serving from edge cache
+var edgeCacheIgnoredHeaders = []string{
+	"set-cookie", "x-cache", "range", "content-encoding", "content-length", "transfer-encoding", "connection",
+}
 var edgeCache = make(map[string]EdgeCacheFile)
 var edgeCacheExpiry = make(map[string]time.Time)
 var edgeCacheHeaders = make(map[string]map[string]string)
@@ -63,6 +71,14 @@ func AddFileToEdgeCache(data EdgeCacheFile) error {
 	// If the cache already has this file, update it
 	edgeCache[data.Path] = data
 	edgeCacheExpiry[data.Path] = now.Add(data.Duration)
-	edgeCacheHeaders[data.Path] = data.Headers
+	headers := make(map[string]string)
+	for k, v := range data.Headers {
+		k = strings.TrimSpace(strings.ToLower(k))
+		if slices.Contains(edgeCacheIgnoredHeaders, k) {
+			continue
+		}
+		headers[k] = v
+	}
+	edgeCacheHeaders[data.Path] = headers
 	return nil
 }
