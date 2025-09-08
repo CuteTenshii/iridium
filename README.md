@@ -30,8 +30,27 @@ As of now, there are no pre-built binaries available. You need to build it from 
 You can build and run Iridium using Docker with the following commands:
 
 ```bash
-docker build -t iridium .
-docker run -d -p 8080:8080 --name iridium -v ./iridium-data:/root/.iridium iridium
+docker run -d \
+  -p 8080:8080 \
+  -v ./iridium-data:/root/.iridium \
+  --name iridium \
+  ghcr.io/iridiumproxy/iridium:latest
+```
+
+### Docker Compose
+
+You can also use Docker Compose to set up Iridium. Create a `docker-compose.yml` file with the following content:
+
+```yaml
+services:
+  iridium:
+    image: ghcr.io/iridiumproxy/iridium:latest
+    container_name: iridium
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./iridium-data:/root/.iridium
 ```
 
 ### macOS
