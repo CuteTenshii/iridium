@@ -56,7 +56,7 @@ func DialTarget(targetHost string) (net.Conn, error) {
 }
 
 // MakeProxyRequest constructs and sends a proxied HTTP request to the target host, then reads and serves the response back to the client.
-func MakeProxyRequest(conn net.Conn, request HttpRequest, targetHost string) HttpRequest {
+func MakeProxyRequest(conn net.Conn, request HttpRequest, targetHost string) (*HttpRequest, error) {
 	proxyRequest := HttpRequest{
 		Method:  request.Method,
 		Body:    request.Body,
@@ -91,12 +91,12 @@ func MakeProxyRequest(conn net.Conn, request HttpRequest, targetHost string) Htt
 			ErrorLog(err)
 			ServeError(conn, request, 504)
 			conn.Close()
-			return proxyRequest
+			return nil, err
 		} else {
 			ErrorLog(err)
 			ServeError(conn, request, 502)
 			conn.Close()
-			return proxyRequest
+			return nil, err
 		}
 	}
 
@@ -116,14 +116,14 @@ func MakeProxyRequest(conn net.Conn, request HttpRequest, targetHost string) Htt
 			ErrorLog(err)
 			ServeError(conn, request, 504)
 			conn.Close()
-			return proxyRequest
+			return nil, err
 		}
 		log.Println("Error reading proxy response:", err.Error())
 		ServeError(conn, request, 500)
-		return proxyRequest
+		return nil, err
 	}
 
-	return response
+	return &response, nil
 }
 
 func ReadProxyResponse(conn net.Conn, path string) (HttpRequest, error) {

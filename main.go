@@ -293,7 +293,11 @@ func handleConnection(conn net.Conn, hosts []Host) {
 					})
 					return
 				} else if location.Proxy != nil {
-					response := MakeProxyRequest(conn, request, *location.Proxy)
+					response, err := MakeProxyRequest(conn, request, *location.Proxy)
+					if err != nil {
+						ErrorLog(err)
+						return
+					}
 					if response.Headers == nil {
 						ServeError(conn, request, 500)
 						return
