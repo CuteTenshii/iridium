@@ -142,7 +142,6 @@ func MakeWAFChecks(request HttpRequest) WAFResult {
 		}
 	}
 
-	return WAFResult{Blocked: true}
 	enabled := GetConfigValue("waf.enabled", false).(bool)
 	if !enabled {
 		return WAFResult{Blocked: false}
