@@ -105,7 +105,8 @@ func handleConnection(conn net.Conn, hosts []Host) {
 							headers["set-cookie"] = SetCookie("iridium_clearance", *waf.ClearanceToken, StrPtr("/"), nil, IntPtr(int(clearanceMaxAge.Seconds())), false, true)
 						}
 
-						if request.Headers["if-modified-since"] == lastModified {
+						ifModifiedSince := request.Headers["if-modified-since"]
+						if ifModifiedSince != "" && ifModifiedSince == lastModified {
 							headers["last-modified"] = lastModified
 							ServeResponse(conn, request, ResponseServed{
 								Status:  304,
@@ -298,6 +299,23 @@ func handleConnection(conn net.Conn, hosts []Host) {
 						return
 					}
 
+					cacheControl := response.Headers["cache-control"]
+					if cacheControl != "" {
+						parts := strings.Split(cacheControl, ",")
+						for _, part := range parts {
+							part = strings.TrimSpace(part)
+							if part == "no-store" || part == "no-cache" || part == "private" {
+								isCacheable = false
+								break
+							} else if strings.HasPrefix(part, "max-age=") {
+								ageStr := strings.TrimPrefix(part, "max-age=")
+								age, err := strconv.Atoi(ageStr)
+								if err == nil && age < cacheDuration {
+									cacheDuration = age
+								}
+							}
+						}
+					}
 					if isCacheable && response.Status == 200 {
 						if _, found := GetFileFromEdgeCache(request.Path); !found {
 							response.Headers["x-cache"] = "MISS"
