@@ -102,3 +102,7 @@ That's all you need to do to enable captcha protection for blocked requests, Iri
 ![WAF Captcha Example](.github/screenshots/waf-captcha.png)
 
 When the captcha is successfully solved, the user will be allowed to access the requested resource, and a `iridium_clearance` cookie will be set to remember the user for future requests (for 30 minutes by default).
+
+> [!NOTE]
+> To protect from spoofing, the `iridium_clearance` cookie is tied to the user's IP address and User-Agent. If either of these change, the user will need to solve the captcha again.
+> Also, the cookie is signed using AES-256 encryption to prevent tampering.

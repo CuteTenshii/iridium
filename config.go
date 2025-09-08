@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"os"
@@ -9,10 +10,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const DefaultConfig = `# Iridium Reverse Proxy Configuration File
+var encryptionKey string
+var DefaultConfig = `# Iridium Reverse Proxy Configuration File
 
 waf:
   enabled: false
+  # 32-byte hex string for AES-256 encryption. If empty, a random key will be generated on startup, which will invalidate existing WAF data.
+  encryption_key: "` + generateWAFEncryptionKey() + `"
+
   # Block requests with User-Agent headers matching common library/tool patterns, such as curl, wget, Postman, etc.
   block_libraries: true
   # Block requests with User-Agent headers matching common web crawlers and bots, such as Googlebot, Bingbot, etc.
@@ -153,7 +158,6 @@ func GetConfigValue(key string, def interface{}) interface{} {
 			return def
 		}
 		config = &conf
-		return def
 	}
 	if val, ok := (*configMap)[key]; ok {
 		return val
@@ -177,4 +181,17 @@ func GetConfigValue(key string, def interface{}) interface{} {
 		}
 	}
 	return def
+}
+
+func generateWAFEncryptionKey() string {
+	if encryptionKey != "" {
+		return encryptionKey
+	}
+	key := make([]byte, 16)
+	_, err := rand.Read(key)
+	if err != nil {
+		return ""
+	}
+	encryptionKey = fmt.Sprintf("%x", key)
+	return encryptionKey
 }

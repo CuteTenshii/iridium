@@ -104,6 +104,14 @@ func ServeResponse(conn net.Conn, request HttpRequest, resp ResponseServed) {
 }
 
 func ServeError(conn net.Conn, request HttpRequest, status int) {
+	body := ErrorHTML(status)
+	ServeResponse(conn, request, ResponseServed{
+		Status: status,
+		Body:   body,
+	})
+}
+
+func ErrorHTML(status int) string {
 	var statusText string
 	switch status {
 	case 400:
@@ -123,12 +131,8 @@ func ServeError(conn net.Conn, request HttpRequest, status int) {
 	default:
 		statusText = "Unknown Error"
 	}
-	body := fmt.Sprintf(
+	return fmt.Sprintf(
 		"<!DOCTYPE html><html><head><title>%s</title></head><body><center><h1>%d %s</h1><hr><p>Iridium v%s</p></center></body></html>",
 		statusText, status, statusText, VERSION,
 	)
-	ServeResponse(conn, request, ResponseServed{
-		Status: status,
-		Body:   body,
-	})
 }

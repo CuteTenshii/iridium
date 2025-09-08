@@ -1,18 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
-
-	"github.com/klauspost/compress/gzip"
 )
 
 // Common User-Agent regex patterns.
@@ -70,17 +66,11 @@ func MakeWAFChecks(request HttpRequest) WAFResult {
 	cookies := ParseCookies(request.Headers["cookie"])
 	if val, ok := cookies["iridium_clearance"]; ok {
 		// Validate the token
-		tokenData, err := base64.StdEncoding.DecodeString(val)
-		if err == nil {
-			var tokenMap map[string]interface{}
-			err = json.Unmarshal(tokenData, &tokenMap)
-			if err == nil {
-				if tokenMap["user_agent"] == request.Headers["user-agent"] && tokenMap["ip"] == request.Headers["x-forwarded-for"] {
-					println("WAF: Valid clearance token, allowing request")
-					// Valid token, allow the request
-					return WAFResult{Blocked: false}
-				}
-			}
+		tokenMap, err := DecompressWAFData(val)
+		if err == nil && tokenMap.UserAgent == request.Headers["user-agent"] && tokenMap.IP == request.Headers["x-forwarded-for"] {
+			println("WAF: Valid clearance token, allowing request")
+			// Valid token, allow the request
+			return WAFResult{Blocked: false}
 		}
 		// Invalid token, proceed with further checks
 	}
@@ -95,30 +85,17 @@ func MakeWAFChecks(request HttpRequest) WAFResult {
 			AppendLog("waf", fmt.Sprintf("Error parsing CAPTCHA request body: %v\n", err))
 			// Just continue processing the request if parsing fails, it's likely not a WAF request
 		} else {
-			var buf bytes.Buffer
-			data, err := base64.StdEncoding.DecodeString(parsed.Get("data"))
-			decompressed, err := gzip.NewReader(strings.NewReader(string(data)))
+			wafBody, err := DecompressWAFData(parsed.Get("data"))
 			if err != nil {
-				AppendLog("waf", fmt.Sprintf("Error creating gzip reader for CAPTCHA request: %v\n", err))
+				AppendLog("waf", fmt.Sprintf("Error decompressing CAPTCHA request data: %v\n", err))
 				// Just continue processing the request if decompression fails, it's likely not a WAF request
 			} else {
-				io.Copy(&buf, decompressed)
-				decompressed.Close()
-				data, err = base64.StdEncoding.DecodeString(buf.String())
-				var wafBody WAFBody
-				err := json.Unmarshal(data, &wafBody)
-				if err != nil {
-					AppendLog("waf", fmt.Sprintf("Error unmarshaling CAPTCHA request body: %v\n", err))
-					// Just continue processing the request if unmarshaling fails, it's likely not a WAF request
-				}
 				if request.Headers["user-agent"] != wafBody.UserAgent || request.Path != wafBody.Path {
 					AppendLog("waf", fmt.Sprintf("CAPTCHA request data does not match original request from IP %s\n", wafBody.IP))
 					return WAFResult{Blocked: true, Reason: StrPtr("captcha data mismatch")}
 				}
-				if wafBody.CaptchaProvider != "hcaptcha" && wafBody.CaptchaProvider != "recaptcha" && wafBody.CaptchaProvider != "turnstile" {
-					AppendLog("waf", fmt.Sprintf("Unsupported CAPTCHA provider in request from IP %s: %s\n", wafBody.IP, wafBody.CaptchaProvider))
-					return WAFResult{Blocked: true, Reason: StrPtr("unsupported captcha provider")}
-				}
+
+				// Validate the CAPTCHA response
 				var captchaResponse string
 				if wafBody.CaptchaProvider == "hcaptcha" {
 					captchaResponse = parsed.Get("h-captcha-response")
@@ -126,12 +103,16 @@ func MakeWAFChecks(request HttpRequest) WAFResult {
 					captchaResponse = parsed.Get("g-recaptcha-response")
 				} else if wafBody.CaptchaProvider == "turnstile" {
 					captchaResponse = parsed.Get("cf-turnstile-response")
+				} else {
+					AppendLog("waf", fmt.Sprintf("Unsupported CAPTCHA provider in request from IP %s: %s\n", wafBody.IP, wafBody.CaptchaProvider))
+					return WAFResult{Blocked: true, Reason: StrPtr("unsupported captcha provider")}
 				}
 				secretKey := GetConfigValue("waf.captcha.secret_key", "").(string)
 				if secretKey == "" || secretKey == "your-secret-key" {
 					ErrorLog(errors.New("captcha secret key is not configured"))
 					return WAFResult{Blocked: true, Reason: StrPtr("captcha not configured")}
 				}
+
 				isCaptchaValid := CheckCaptchaSolution(captchaResponse, wafBody.CaptchaProvider, secretKey)
 				if !isCaptchaValid {
 					AppendLog("waf", fmt.Sprintf("Invalid CAPTCHA solution from IP %s using %s\n", wafBody.IP, wafBody.CaptchaProvider))
@@ -148,6 +129,7 @@ func MakeWAFChecks(request HttpRequest) WAFResult {
 					AppendLog("waf", fmt.Sprintf("Error decoding CAPTCHA request headers from IP %s: %v\n", wafBody.IP, err))
 					return WAFResult{Blocked: true, Reason: StrPtr("captcha headers error")}
 				}
+
 				err = json.Unmarshal(headers, &modifiedRequest.Headers)
 				if err != nil {
 					AppendLog("waf", fmt.Sprintf("Error unmarshaling CAPTCHA request headers from IP %s: %v\n", wafBody.IP, err))
@@ -160,6 +142,7 @@ func MakeWAFChecks(request HttpRequest) WAFResult {
 		}
 	}
 
+	return WAFResult{Blocked: true}
 	enabled := GetConfigValue("waf.enabled", false).(bool)
 	if !enabled {
 		return WAFResult{Blocked: false}
@@ -209,12 +192,13 @@ func GetCaptchaHTML(siteKey string, provider string, data interface{}) string {
 		captchaHtml = `<div class="cf-turnstile" data-sitekey="` + siteKey + `" data-callback="onSubmit" data-theme="dark"></div>`
 	}
 	stringifiedData, _ := json.Marshal(data)
-	encodedData := base64.StdEncoding.EncodeToString(stringifiedData)
-	var buffer bytes.Buffer
-	compressed, _ := gzip.NewWriterLevel(&buffer, gzip.BestCompression)
-	io.Copy(compressed, strings.NewReader(encodedData))
-	compressed.Close()
-	encodedData = base64.StdEncoding.EncodeToString(buffer.Bytes())
+	encryptionKey := GetConfigValue("waf.encryption_key", generateWAFEncryptionKey()).(string)
+	encrypted, err := encryptAESGCM(stringifiedData, []byte(encryptionKey))
+	if err != nil {
+		ErrorLog(fmt.Errorf("error encrypting WAF data: %v", err))
+		return ErrorHTML(500)
+	}
+	encodedData := base64.StdEncoding.EncodeToString(encrypted)
 	html := MinifyHTML(`<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -249,11 +233,8 @@ func GetCaptchaHTML(siteKey string, provider string, data interface{}) string {
   <body>
 	<div class="container">
 	  <h1>Please complete the CAPTCHA to continue to the site</h1>
-	  <form method="POST">
-` + captchaHtml + `
-		<input type="hidden" name="data" value="` + encodedData + `" />
-</form>
-</div>
+	  <form method="POST">` + captchaHtml + `<input type="hidden" name="data" value="` + encodedData + `" /></form>
+	</div>
 <div>
 <p>Security & protection by <a href="https://github.com/IridiumProxy/iridium" target="_blank" style="color: #4ea1f3;">Iridium</a></p>
 </div>
@@ -261,7 +242,7 @@ func GetCaptchaHTML(siteKey string, provider string, data interface{}) string {
 window.onSubmit = (token) => {
   const form = document.querySelector('form');
   form.submit();
-  form.innerHTML = 'Waiting for'+window.location.hostname+' to respond...';
+  form.innerHTML = 'Waiting for '+window.location.hostname+' to respond...';
 }`) + `
 </script>
 </body>
@@ -349,6 +330,39 @@ func CreateWAFSuccessToken(request HttpRequest) string {
 	data["ip"] = request.Headers["x-forwarded-for"]
 	data["accept_language"] = request.Headers["accept-language"]
 	data["accept_encoding"] = request.Headers["accept-encoding"]
-	encoded, _ := json.Marshal(data)
+	return CompressWAFData(data)
+}
+
+// CompressWAFData compresses and encodes the given data: JSON stringify -> base64 encode -> AES-GCM encrypt -> base64 encode
+func CompressWAFData(data interface{}) string {
+	stringifiedData, _ := json.Marshal(data)
+	encryptionKey := GetConfigValue("waf.encryption_key", generateWAFEncryptionKey()).(string)
+	encoded, err := encryptAESGCM(stringifiedData, []byte(encryptionKey))
+	if err != nil {
+		ErrorLog(fmt.Errorf("error encrypting WAF data: %v", err))
+		return ""
+	}
 	return base64.StdEncoding.EncodeToString(encoded)
+}
+
+// DecompressWAFData reverses the compression and encoding done by CompressWAFData.
+func DecompressWAFData(compressedStr string) (*WAFBody, error) {
+	if compressedStr == "" {
+		return nil, errors.New("empty compressed string")
+	}
+	data, err := base64.StdEncoding.DecodeString(compressedStr)
+	if err != nil {
+		return nil, err
+	}
+	encryptionKey := GetConfigValue("waf.encryption_key", generateWAFEncryptionKey()).(string)
+	decoded, err := decryptAESGCM(data, []byte(encryptionKey))
+	if err != nil {
+		return nil, err
+	}
+	var result WAFBody
+	err = json.Unmarshal(decoded, &result)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
