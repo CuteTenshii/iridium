@@ -100,3 +100,5 @@ You will also need to provide the site key and secret key for the captcha provid
 That's all you need to do to enable captcha protection for blocked requests, Iridium will handle the rest!
 
 ![WAF Captcha Example](.github/screenshots/waf-captcha.png)
+
+When the captcha is successfully solved, the user will be allowed to access the requested resource, and a `iridium_clearance` cookie will be set to remember the user for future requests (for 30 minutes by default).

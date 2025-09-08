@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -43,7 +45,7 @@ func handleConnection(conn net.Conn, hosts []Host) {
 		serveCaptcha := GetConfigValue("waf.captcha.enabled", false).(bool)
 		if serveCaptcha {
 			sitekey := GetConfigValue("waf.captcha.site_key", "").(string)
-			if sitekey == "" {
+			if sitekey == "" || sitekey == "your-site-key" {
 				ErrorLog(errors.New("captcha sitekey is not set in config"))
 				ServeError(conn, request, 403)
 				return
@@ -54,12 +56,30 @@ func handleConnection(conn net.Conn, hosts []Host) {
 				ServeError(conn, request, 403)
 				return
 			}
-			page := GetCaptchaHTML(sitekey, provider)
+			// Data to be used in the captcha page to identify the request.
+			data := make(map[string]string)
+			data["ip"] = GetLocalIpWithoutPort(remoteIp)
+			data["user_agent"] = request.Headers["user-agent"]
+			data["host"] = host
+			data["path"] = request.Path
+			data["method"] = request.Method
+			data["body"] = request.Body
+			data["captcha_provider"] = provider
+			jsonHeaders, _ := json.Marshal(request.Headers)
+			data["headers"] = base64.StdEncoding.EncodeToString(jsonHeaders)
+			page := GetCaptchaHTML(sitekey, provider, data)
 			ServeResponse(conn, request, ResponseServed{Status: 403, Body: page})
 		} else {
 			ServeError(conn, request, 403)
 		}
 		return
+	}
+	clearanceMaxAge := 30 * time.Minute
+	if waf.ModifiedRequest != nil {
+		request.Headers = waf.ModifiedRequest.Headers
+		request.Body = waf.ModifiedRequest.Body
+		request.Method = waf.ModifiedRequest.Method
+		request.Path = waf.ModifiedRequest.Path
 	}
 	RequestLog(request.Method, request.Path, request.Version, remoteIp)
 
@@ -96,6 +116,9 @@ func handleConnection(conn net.Conn, hosts []Host) {
 
 						headers["x-cache"] = "HIT"
 						headers["age"] = fmt.Sprintf("%d", int(time.Since(data.AddedAt).Seconds()))
+						if waf.ClearanceToken != nil {
+							headers["set-cookie"] = fmt.Sprintf("iridium_clearance=%s; Path=/; Max-Age=%d; HttpOnly", *waf.ClearanceToken, int(clearanceMaxAge.Seconds()))
+						}
 						ServeResponse(conn, request, ResponseServed{
 							Status:      200,
 							Body:        string(data.Data),
@@ -225,6 +248,9 @@ func handleConnection(conn net.Conn, hosts []Host) {
 
 						data = data[start : end+1]
 						headers["content-range"] = fmt.Sprintf("bytes %d-%d/%d", start, end, stat.Size())
+						if waf.ClearanceToken != nil {
+							headers["set-cookie"] = fmt.Sprintf("iridium_clearance=%s; Path=/; Max-Age=%d; HttpOnly", *waf.ClearanceToken, int(clearanceMaxAge.Seconds()))
+						}
 						ServeResponse(conn, request, ResponseServed{
 							Status:      206,
 							Body:        string(data),
@@ -278,6 +304,9 @@ func handleConnection(conn net.Conn, hosts []Host) {
 					}
 
 					contentType, _ := response.Headers["content-type"]
+					if waf.ClearanceToken != nil {
+						response.Headers["set-cookie"] = fmt.Sprintf("iridium_clearance=%s; Path=/; Max-Age=%d; HttpOnly", *waf.ClearanceToken, int(clearanceMaxAge.Seconds()))
+					}
 					ServeResponse(conn, request, ResponseServed{
 						Status:      response.Status,
 						Body:        response.Body,
