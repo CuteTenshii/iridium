@@ -86,7 +86,7 @@ func ServeResponse(conn net.Conn, request HttpRequest, resp ResponseServed) {
 	}
 	conn.Write([]byte(fmt.Sprintf("HTTP/1.1 %d\r\n", resp.Status)))
 	conn.Write([]byte(fmt.Sprintf("server: Iridium/%s\r\n", VERSION)))
-	conn.Write([]byte("connection: close\r\n"))
+	conn.Write([]byte("connection: keep-alive\r\n"))
 	conn.Write([]byte(fmt.Sprintf("content-length: %d\r\n", contentLength)))
 	conn.Write([]byte(fmt.Sprintf("content-type: %s\r\n", *resp.ContentType)))
 	conn.Write([]byte("vary: Accept-Encoding\r\n"))

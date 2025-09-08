@@ -84,6 +84,7 @@ func MakeProxyRequest(conn net.Conn, request HttpRequest, targetHost string) (*H
 	localAddr := conn.LocalAddr().String()
 	proxyRequest.Headers["x-forwarded-for"] = GetLocalIpWithoutPort(localAddr)
 	proxyRequest.Headers["accept-encoding"] = "gzip, deflate, zstd"
+	proxyRequest.Headers["connection"] = "keep-alive"
 
 	req, err := DialTarget(targetHost)
 	if err != nil {
