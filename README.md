@@ -27,7 +27,7 @@ As of now, there are no pre-built binaries available. You need to build it from 
 
 ### Docker
 
-You can build and run Iridium using Docker with the following commands:
+You can run Iridium using Docker with the following command:
 
 ```bash
 docker run -d \
