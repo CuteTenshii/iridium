@@ -1,11 +1,12 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"iridium/cli"
 	"mime"
 	"net"
 	"net/url"
@@ -354,6 +355,37 @@ func handleConnection(conn net.Conn, hosts []Host) {
 	}
 }
 
+func StartListener() (net.Listener, error) {
+	port := GetConfigValue("server.port", 8080).(int)
+	tlsCertFile := GetConfigValue("tls.cert_file", "").(string)
+	tlsKeyFile := GetConfigValue("tls.key_file", "").(string)
+
+	if tlsCertFile != "" && tlsKeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(tlsCertFile, tlsKeyFile)
+		if err != nil {
+			return nil, err
+		}
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
+		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			return nil, err
+		}
+		tlsListener := tls.NewListener(listener, tlsConfig)
+		println(fmt.Sprintf("Iridium is running on port %d", port))
+		return tlsListener, nil
+	}
+
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return nil, err
+	}
+	println(fmt.Sprintf("Iridium is running on port %d", port))
+	return listener, nil
+}
+
 func main() {
 	if len(os.Args) > 1 {
 		if os.Args[1] == "--version" || os.Args[1] == "-v" {
@@ -366,6 +398,8 @@ func main() {
 			fmt.Println("  --version, -v    Show version information")
 			fmt.Println("  --help, -h       Show this help message")
 			fmt.Println("  validate         Validate the configuration file")
+			fmt.Println("  cert generate <host>   Generate a self-signed TLS certificate for the specified host")
+			fmt.Println("  cert obtain <host>     Obtain a TLS certificate from Let's Encrypt for the specified host")
 			return
 		} else if os.Args[1] == "validate" {
 			println("Validating configuration...")
@@ -378,11 +412,37 @@ func main() {
 			// TODO
 
 			return
+		} else if os.Args[1] == "cert" {
+			if len(os.Args) < 3 {
+				println("Please specify 'generate' or 'obtain'. Example: iridium cert generate example.com\nRead more: https://iridiumproxy.github.io/tls/introduction/")
+				return
+			}
+			if os.Args[2] == "generate" {
+				_, _, err := cli.GenerateSelfSignedCert(os.Args[3])
+				if err != nil {
+					println("Failed to generate self-signed certificate:", err.Error())
+					return
+				}
+				return
+			} else if os.Args[2] == "obtain" {
+				if len(os.Args) < 4 {
+					println("Please specify a domain. Example: iridium cert obtain example.com")
+					return
+				}
+				fmt.Println("Obtaining TLS certificate using Let's Encrypt...")
+				_, _, err := cli.GenerateACMECert(os.Args[3])
+				if err != nil {
+					println("Failed to obtain TLS certificate:", err.Error())
+					return
+				}
+			}
+			return
 		}
+		println("Unknown argument:", os.Args[1])
+		return
 	}
 
-	port := 8080
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	listener, err := StartListener()
 	if err != nil {
 		if errors.Is(err, net.ErrClosed) {
 			println("Network is closed")
@@ -395,9 +455,8 @@ func main() {
 	if err != nil {
 		panic("Failed to load hosts:" + err.Error())
 	}
-	log.Printf("Loaded %d host(s)\n", len(hosts))
+	fmt.Printf("Loaded %d host(s)\n", len(hosts))
 	defer listener.Close()
-	println(fmt.Sprintf("Reverse proxy running on port %d", port))
 
 	for {
 		conn, err := listener.Accept()
