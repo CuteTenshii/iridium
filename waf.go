@@ -154,7 +154,7 @@ func MakeWAFChecks(request HttpRequest) WAFResult {
 
 	if blockEmptyUA && strings.TrimSpace(ua) == "" {
 		AppendLog("waf", "Blocked request with empty User-Agent")
-		return WAFResult{Blocked: true, Reason: StrPtr("empty User-Agent"), CloseConnection: true}
+		return WAFResult{Blocked: true, Reason: StrPtr("empty User-Agent")}
 	}
 	if blockLibraries && ua != "" {
 		if BunUserAgent.MatchString(ua) || InsomniaUserAgent.MatchString(ua) || PostmanUserAgent.MatchString(ua) ||
@@ -162,7 +162,7 @@ func MakeWAFChecks(request HttpRequest) WAFResult {
 			AxiosUserAgent.MatchString(ua) || HttpxUserAgent.MatchString(ua) || PythonRequestsUserAgent.MatchString(ua) ||
 			JavaUserAgent.MatchString(ua) || PhpUserAgent.MatchString(ua) || PerlUserAgent.MatchString(ua) {
 			AppendLog("waf", fmt.Sprintf("Blocked request with library/tool User-Agent: %s\n", ua))
-			return WAFResult{Blocked: true, Reason: StrPtr("library/tool User-Agent"), CloseConnection: true}
+			return WAFResult{Blocked: true, Reason: StrPtr("library/tool User-Agent")}
 		}
 	}
 	if blockCrawlers && ua != "" {
@@ -170,7 +170,7 @@ func MakeWAFChecks(request HttpRequest) WAFResult {
 			YandexUserAgent.MatchString(ua) || DuckduckbotUserAgent.MatchString(ua) || FacebookbotUserAgent.MatchString(ua) ||
 			TwitterbotUserAgent.MatchString(ua) {
 			AppendLog("waf", fmt.Sprintf("Blocked request with crawler/bot User-Agent: %s\n", ua))
-			return WAFResult{Blocked: true, Reason: StrPtr("crawler/bot User-Agent"), CloseConnection: true}
+			return WAFResult{Blocked: true, Reason: StrPtr("crawler/bot User-Agent")}
 		}
 	}
 
