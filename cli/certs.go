@@ -9,7 +9,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
-	"log"
 	"math/big"
 	"net/http"
 	"os"
@@ -73,13 +72,14 @@ func GenerateACMECert(domain string) (certPEM []byte, keyPEM []byte, err error) 
 	challengeHandler := m.HTTPHandler(nil)
 	http.HandleFunc("/.well-known/acme-challenge/", func(w http.ResponseWriter, r *http.Request) {
 		token := strings.TrimPrefix(r.URL.Path, "/.well-known/acme-challenge/")
-		log.Printf("[ACME] Challenge requested: token=%s", token)
+		fmt.Printf("[ACME] Challenge requested: token=%s", token)
 		challengeHandler.ServeHTTP(w, r)
 	})
 	err = http.ListenAndServe(":80", nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to start HTTP server for ACME challenge: %v", err)
 	}
+	fmt.Println("Started HTTP server on port 80 for ACME challenge.\nIf you are running this behind Docker, ensure port 80 is exposed.\nIf you are using a firewall, ensure port 80 is open.")
 
 	cert, err := m.GetCertificate(&tls.ClientHelloInfo{ServerName: domain})
 	if err != nil {
