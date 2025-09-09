@@ -55,6 +55,31 @@ func DialTarget(targetHost string) (net.Conn, error) {
 	return nil, err
 }
 
+func FormatTargetHost(host string) string {
+	if strings.Contains(host, "://") { // Remove scheme if present
+		parts := strings.SplitN(host, "://", 2)
+		host = parts[1]
+	} else if strings.Contains(host, "/") { // Remove any path components
+		parts := strings.SplitN(host, "/", 2)
+		host = parts[0]
+	} else if strings.Contains(host, ":/") { // Handle malformed scheme
+		parts := strings.SplitN(host, ":/", 2)
+		host = parts[1]
+	}
+
+	if strings.Contains(host, ":") {
+		// If host includes a port, validate the port number
+		parts := strings.SplitN(host, ":", 2)
+		port := parts[1]
+		if portNum, err := strconv.Atoi(port); err != nil || portNum < 1 || portNum > 65535 {
+			return parts[0] // Invalid port, return only hostname
+		}
+		return host // Valid host:port
+	}
+
+	return host // Host without port
+}
+
 // MakeProxyRequest constructs and sends a proxied HTTP request to the target host, then reads and serves the response back to the client.
 func MakeProxyRequest(conn net.Conn, request HttpRequest, targetHost string) (*HttpRequest, error) {
 	proxyRequest := HttpRequest{
@@ -86,7 +111,7 @@ func MakeProxyRequest(conn net.Conn, request HttpRequest, targetHost string) (*H
 	proxyRequest.Headers["accept-encoding"] = "gzip, deflate, zstd"
 	proxyRequest.Headers["connection"] = "keep-alive"
 
-	req, err := DialTarget(targetHost)
+	req, err := DialTarget(FormatTargetHost(targetHost))
 	if err != nil {
 		if strings.Contains(err.Error(), "i/o timeout") {
 			ErrorLog(err)
