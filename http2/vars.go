@@ -38,5 +38,5 @@ const (
 
 const (
 	ClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
-	MaxFrameSize  = 16384 // 2^14 as per RFC 7540, Section 6.5.2
+	MaxFrameSize  = 16384 // 2^14
 )
