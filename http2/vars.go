@@ -23,7 +23,6 @@ const (
 	SettingsFrameType     byte = 0x4
 	WindowUpdateFrameType byte = 0x7
 	PingFrameType         byte = 0x8
-	ContinuationFrameType byte = 0x9
 )
 
 // Flags for SETTINGS frames
@@ -37,18 +36,7 @@ const (
 	PriorityFlag   byte = 0x20
 )
 
-// IndexedHeaderMask - Indexed Header Field representation (1xxxxxxx)
-const IndexedHeaderMask byte = 0x80
-
-// LiteralIncIndexMask - Literal Header Field with incremental indexing (01xxxxxx)
-const LiteralIncIndexMask byte = 0x40
-
-// LiteralNoIndexMask - Literal Header Field without indexing (0000xxxx)
-const LiteralNoIndexMask byte = 0x00
-
-// LiteralNeverIndexMask - Literal Header Field never indexed (0001xxxx)
-const LiteralNeverIndexMask byte = 0x10
-
 const (
 	ClientPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+	MaxFrameSize  = 16384 // 2^14 as per RFC 7540, Section 6.5.2
 )

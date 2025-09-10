@@ -153,8 +153,22 @@ func ServeResponse(conn net.Conn, request HttpRequest, resp ResponseServed) {
 		if err := http2.WriteFrame(conn, http2.HeadersFrameType, http2.EndHeadersFlag, *request.StreamID, buf.Bytes()); err != nil {
 			return
 		}
-		if err := http2.WriteFrame(conn, http2.DataFrameType, http2.EndStreamFlag, *request.StreamID, contentBody); err != nil {
-			return
+		if contentLength > 0 {
+			// Split contentBody into chunks of max size http2.MaxFrameSize
+			for start := 0; start < contentLength; start += http2.MaxFrameSize {
+				end := start + http2.MaxFrameSize
+				if end > contentLength {
+					end = contentLength
+				}
+				chunk := contentBody[start:end]
+				flags := byte(0)
+				if end == contentLength {
+					flags |= http2.EndStreamFlag
+				}
+				if err := http2.WriteFrame(conn, http2.DataFrameType, flags, *request.StreamID, chunk); err != nil {
+					return
+				}
+			}
 		}
 	}
 }
