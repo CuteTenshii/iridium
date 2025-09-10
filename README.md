@@ -20,6 +20,7 @@
 - Edge caching support for static files: caches files in memory for faster delivery
 - Compression support (gzip, deflate, zstd)
 - Rate limiting support: limits the number of requests per IP per second
+- Supports features like Early Hints
 
 ## Installation
 

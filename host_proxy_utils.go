@@ -126,7 +126,7 @@ func MakeProxyRequest(conn net.Conn, request HttpRequest, targetHost string) (*H
 		}
 	}
 
-	req.Write([]byte(request.Method + " " + request.Path + " " + request.Version + CRLF))
+	req.Write([]byte(request.Method + " " + request.Path + " " + "HTTP/1.1" + CRLF))
 	for k, v := range proxyRequest.Headers {
 		req.Write([]byte(fmt.Sprintf("%s: %s\r\n", k, v)))
 	}

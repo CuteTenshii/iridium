@@ -61,6 +61,30 @@ type ResponseServed struct {
 }
 
 func ServeResponse(conn net.Conn, request HttpRequest, resp ResponseServed) {
+	linkHeader := resp.Headers["link"]
+	// Return a "103 Early Hints" if Link header is present
+	if linkHeader != "" {
+		if request.Version == "HTTP/1.1" || request.Version == "HTTP/1.0" {
+			earlyHints := fmt.Sprintf("HTTP/1.1 103 Early Hints\r\n")
+			earlyHints += fmt.Sprintf("link: %s\r\n", linkHeader)
+			earlyHints += "\r\n"
+			if _, err := conn.Write([]byte(earlyHints)); err != nil {
+				fmt.Printf("Error writing early hints: %v\n", err)
+			}
+		} else if request.Version == "HTTP/2.0" {
+			if request.StreamID == nil {
+				return
+			}
+			var buf bytes.Buffer
+			encoder := hpack.NewEncoder(&buf)
+			encoder.WriteField(hpack.HeaderField{Name: ":status", Value: "103"})
+			encoder.WriteField(hpack.HeaderField{Name: "link", Value: linkHeader})
+			if err := http2.WriteFrame(conn, http2.HeadersFrameType, http2.EndHeadersFlag, *request.StreamID, buf.Bytes()); err != nil {
+				return
+			}
+		}
+	}
+
 	var encoding string
 	clientEncodings := request.Headers["accept-encoding"]
 	if clientEncodings != "" {
