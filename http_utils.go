@@ -1,12 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"iridium/http2"
 	"net"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
+
+	"golang.org/x/net/http2/hpack"
 )
 
 func FallbackHtml() string {
@@ -30,22 +35,22 @@ func FallbackHtml() string {
 }
 
 // GetContentBody returns the body as a string and the content length
-func GetContentBody(body []byte, encoding string) (string, int) {
+func GetContentBody(body []byte, encoding string) ([]byte, int) {
 	if encoding == "zstd" || encoding == "gzip" || encoding == "deflate" {
 		enc, err := CompressData(strings.NewReader(string(body)), encoding)
 		if err != nil {
 			fmt.Printf("Error compressing response: %v\n", err)
-			return string(body), len(body)
+			return body, len(body)
 		}
 		ioData, err := io.ReadAll(enc)
 		if err != nil {
 			fmt.Printf("Error reading compressed response: %v\n", err)
-			return string(body), len(body)
+			return body, len(body)
 		}
-		return string(ioData), len(ioData)
+		return ioData, len(ioData)
 	}
 
-	return string(body), len(body)
+	return body, len(body)
 }
 
 type ResponseServed struct {
@@ -84,28 +89,74 @@ func ServeResponse(conn net.Conn, request HttpRequest, resp ResponseServed) {
 		defaultType := "text/html; charset=utf-8"
 		resp.ContentType = &defaultType
 	}
-	conn.Write([]byte(fmt.Sprintf("HTTP/1.1 %d\r\n", resp.Status)))
-	conn.Write([]byte(fmt.Sprintf("server: Iridium/%s\r\n", VERSION)))
-	conn.Write([]byte("connection: keep-alive\r\n"))
-	conn.Write([]byte(fmt.Sprintf("content-length: %d\r\n", contentLength)))
-	conn.Write([]byte(fmt.Sprintf("content-type: %s\r\n", *resp.ContentType)))
-	conn.Write([]byte("vary: Accept-Encoding\r\n"))
-	conn.Write([]byte(fmt.Sprintf("date: %s\r\n", time.Now().UTC().Format("Mon, 02 Jan 2006 15:04:05 GMT"))))
-	if isValidEncoding {
-		conn.Write([]byte(fmt.Sprintf("content-encoding: %s\r\n", encoding)))
-	}
-	if resp.Headers != nil {
-		for k, v := range resp.Headers {
-			k = strings.TrimSpace(strings.ToLower(k))
-			if slices.Contains(ServerIgnoredHeaders, k) {
-				continue
+
+	// Build HTTP response
+	if request.Version == "HTTP/1.1" || request.Version == "HTTP/1.0" {
+		response := fmt.Sprintf("HTTP/1.1 %d\r\n", resp.Status)
+		response += fmt.Sprintf("server: Iridium/%s\r\n", VERSION)
+		response += "connection: keep-alive\r\n"
+		response += fmt.Sprintf("content-length: %d\r\n", contentLength)
+		response += fmt.Sprintf("content-type: %s\r\n", *resp.ContentType)
+		response += "vary: Accept-Encoding\r\n"
+		response += fmt.Sprintf("date: %s\r\n", time.Now().UTC().Format(http.TimeFormat))
+		if isValidEncoding {
+			response += fmt.Sprintf("content-encoding: %s\r\n", encoding)
+		}
+		if resp.Headers != nil {
+			for k, v := range resp.Headers {
+				k = strings.TrimSpace(strings.ToLower(k))
+				if slices.Contains(ServerIgnoredHeaders, k) {
+					continue
+				}
+				response += fmt.Sprintf("%s: %s\r\n", k, v)
 			}
-			conn.Write([]byte(fmt.Sprintf("%s: %s\r\n", k, v)))
+		}
+		response += "\r\n"
+		response += string(contentBody)
+
+		// Write response to connection
+		_, err := conn.Write([]byte(response))
+		if err != nil {
+			fmt.Printf("Error writing response: %v\n", err)
+		}
+		conn.Close()
+	} else if request.Version == "HTTP/2.0" {
+		responseHeaders := []hpack.HeaderField{
+			{Name: ":status", Value: fmt.Sprintf("%d", resp.Status)},
+			{Name: "server", Value: fmt.Sprintf("Iridium/%s", VERSION)},
+			{Name: "content-length", Value: fmt.Sprintf("%d", contentLength)},
+			{Name: "content-type", Value: *resp.ContentType},
+			{Name: "vary", Value: "Accept-Encoding"},
+			{Name: "date", Value: time.Now().UTC().Format(http.TimeFormat)},
+		}
+		if isValidEncoding {
+			responseHeaders = append(responseHeaders, hpack.HeaderField{Name: "content-encoding", Value: encoding})
+		}
+		if resp.Headers != nil {
+			for k, v := range resp.Headers {
+				k = strings.TrimSpace(strings.ToLower(k))
+				if slices.Contains(ServerIgnoredHeaders, k) {
+					continue
+				}
+				responseHeaders = append(responseHeaders, hpack.HeaderField{Name: k, Value: v})
+			}
+		}
+		var buf bytes.Buffer
+		encoder := hpack.NewEncoder(&buf)
+		for _, hf := range responseHeaders {
+			encoder.WriteField(hf) // encodes each header into buf
+		}
+
+		if request.StreamID == nil {
+			return
+		}
+		if err := http2.WriteFrame(conn, http2.HeadersFrameType, http2.EndHeadersFlag, *request.StreamID, buf.Bytes()); err != nil {
+			return
+		}
+		if err := http2.WriteFrame(conn, http2.DataFrameType, http2.EndStreamFlag, *request.StreamID, contentBody); err != nil {
+			return
 		}
 	}
-	conn.Write([]byte("\r\n"))
-	conn.Write([]byte(contentBody))
-	conn.Close()
 }
 
 func ServeError(conn net.Conn, request HttpRequest, status int) {

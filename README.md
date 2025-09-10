@@ -10,7 +10,7 @@
 ## Features
 
 - Configurable via YAML config files
-- Supports HTTP
+- Supports HTTP, HTTPS, and HTTP/2
 - Supports static responses, static files, and proxying to other servers
 - Basic logging (to console and files)
 - Uses raw TCP connections (no HTTP library)

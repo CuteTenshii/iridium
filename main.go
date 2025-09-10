@@ -21,7 +21,21 @@ const VERSION = "1.0.0"
 
 func handleConnection(conn net.Conn, hosts []Host) {
 	defer conn.Close()
-	request, err := ReadRequest(conn)
+
+	var request HttpRequest
+	var err error
+	if tlsConn, ok := conn.(*tls.Conn); ok {
+		if err = tlsConn.Handshake(); err != nil {
+			ErrorLog(err)
+			return
+		}
+		state := tlsConn.ConnectionState()
+		alpn := state.NegotiatedProtocol // "h2" for HTTP/2, "http/1.1" for HTTP/1.1
+		request, err = ReadRequest(conn, alpn)
+	} else {
+		request, err = ReadRequest(conn, "")
+	}
+
 	if err != nil {
 		ErrorLog(err)
 		return
@@ -356,7 +370,6 @@ func handleConnection(conn net.Conn, hosts []Host) {
 }
 
 func StartListener() (net.Listener, error) {
-	port := GetConfigValue("server.port", 8080).(int)
 	tlsCertFile := GetConfigValue("tls.cert_file", "").(string)
 	tlsKeyFile := GetConfigValue("tls.key_file", "").(string)
 
@@ -368,21 +381,23 @@ func StartListener() (net.Listener, error) {
 		tlsConfig := &tls.Config{
 			Certificates: []tls.Certificate{cert},
 			MinVersion:   tls.VersionTLS12,
+			NextProtos:   []string{"h2", "http/1.1"},
 		}
-		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		httpsListener, err := net.Listen("tcp", ":443")
+		go StartHTTPSRedirector()
 		if err != nil {
 			return nil, err
 		}
-		tlsListener := tls.NewListener(listener, tlsConfig)
-		println(fmt.Sprintf("Iridium is running on port %d", port))
+		tlsListener := tls.NewListener(httpsListener, tlsConfig)
+		println("Iridium is running on port 443")
 		return tlsListener, nil
 	}
 
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	listener, err := net.Listen("tcp", ":80")
 	if err != nil {
 		return nil, err
 	}
-	println(fmt.Sprintf("Iridium is running on port %d", port))
+	println("Iridium is running on port 80")
 	return listener, nil
 }
 

@@ -53,21 +53,12 @@ func LoadHosts() ([]Host, error) {
 
 domain: example.com
 locations:
-  - match: /
-    content: |
-      <!DOCTYPE html>
-      <html>
-        <head><title>Welcome to Iridium!</title></head>
-        <body>
-          <center>
-            <h1>Welcome to Iridium!</h1>
-            <p>This is the default page served by Iridium.</p>
-            <p>If you see this page, it means that no host configuration matched your request.</p>
-            <hr>
-            <p>Iridium v` + VERSION + `</p>
-          </center>
-        </body>
-      </html>
+  - match: '*'
+    content: 'It works!'
+
+# Read more: https://iridiumproxy.github.io/edge-cache/introduction/
+edge_cache:
+  enabled: false
 `
 		if err := os.WriteFile(hostsDir+"/default.yml", []byte(defaultContent), 0644); err != nil {
 			return nil, fmt.Errorf("failed to create default hosts file: %v", err)

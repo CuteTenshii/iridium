@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"iridium/http2"
 	"log"
 	"net"
 	"slices"
@@ -13,7 +14,7 @@ import (
 
 var (
 	// HttpMethods List of supported HTTP methods
-	HttpMethods = []string{"GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "TRACE", "CONNECT"}
+	HttpMethods = []string{"GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"}
 	// HttpVersions List of supported HTTP versions
 	HttpVersions = []string{"HTTP/1.0", "HTTP/1.1", "HTTP/2.0"}
 )
@@ -21,39 +22,72 @@ var (
 const CRLF = "\r\n"
 
 type HttpRequest struct {
-	Version string
-	Method  string
-	Path    string
-	Headers map[string]string
-	Body    string
-	Status  int
+	Version  string
+	Method   string
+	Path     string
+	Headers  map[string]string
+	Body     string
+	Status   int
+	StreamID *uint32
 }
 
 // ReadRequest reads and parses an HTTP request from the given connection.
-func ReadRequest(conn net.Conn) (HttpRequest, error) {
+// It supports both HTTP/1.x and HTTP/2 based on the ALPN protocol.
+func ReadRequest(conn net.Conn, alpnProto string) (HttpRequest, error) {
 	reader := bufio.NewReader(conn)
-
 	var request HttpRequest
-	request.Headers = make(map[string]string)
 
+	if alpnProto == "h2" {
+		// HTTP/2 over TLS - skip text parsing and handle preface directly
+		preface, err := http2.HandlePreface(conn, true)
+		if err != nil {
+			return request, err
+		}
+		request.Method = preface.Method
+		request.Path = preface.Path
+		request.Headers = preface.Headers
+		request.Body = string(preface.Body)
+		request.Version = "HTTP/2.0"
+		request.StreamID = &preface.StreamID
+		return request, nil
+	}
+
+	// Fallback to HTTP/1.x or h2c (HTTP/2 cleartext) parsing
 	line, err := reader.ReadString('\n')
 	if err != nil {
 		return request, fmt.Errorf("failed to read request line: %v", err)
 	}
 
-	// Parse the request line. Example: "GET /path HTTP/1.1"
-	fmtParts := make([]string, 3)
-	n, _ := fmt.Sscanf(line, "%s %s %s", &fmtParts[0], &fmtParts[1], &fmtParts[2])
-	if n != 3 {
+	var method, path, version string
+	// Parses the request line. Example: "GET /path HTTP/1.1"
+	n, err := fmt.Sscanf(line, "%s %s %s", &method, &path, &version)
+	if err != nil || n != 3 {
 		return request, fmt.Errorf("malformed request")
 	}
-	if !slices.Contains(HttpMethods, fmtParts[0]) || !slices.Contains(HttpVersions, fmtParts[2]) {
-		return request, fmt.Errorf("%s is not a supported method or version", fmtParts[0]+" "+fmtParts[2])
+
+	// Handle HTTP/2 preface
+	if method == "PRI" && path == "*" && version == "HTTP/2.0" {
+		preface, err := http2.HandlePreface(conn, false)
+		if err != nil {
+			return request, fmt.Errorf("failed to handle HTTP/2 preface: %v", err)
+		}
+		request.Method = preface.Method
+		request.Path = preface.Path
+		request.Headers = preface.Headers
+		request.Body = string(preface.Body)
+		request.Version = "HTTP/2.0"
+		request.StreamID = &preface.StreamID
+		return request, nil
+	} else if !slices.Contains(HttpMethods, method) {
+		return request, fmt.Errorf("unsupported HTTP method: %s", method)
+	} else if !slices.Contains(HttpVersions, version) {
+		return request, fmt.Errorf("unsupported HTTP version: %s", version)
 	}
 
-	request.Method = fmtParts[0]
-	request.Path = fmtParts[1]
-	request.Version = fmtParts[2]
+	request.Headers = make(map[string]string)
+	request.Method = method
+	request.Path = path
+	request.Version = version
 
 	// Read headers
 	for {
